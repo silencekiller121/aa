@@ -12,7 +12,7 @@ from pathlib import Path
 from datetime import datetime
 import tkinter as tk
 from tkinter import ttk, messagebox, scrolledtext
-APP_NAME = "cleaner"
+APP_NAME = "cleaner v0.1"
 LOG_PATH = os.path.join(os.environ.get("USERPROFILE", "."), "pc_cleaner_log.txt")
 PROTECTED_KEYWORDS = [
     "downloads", "desktop", "videos", "documents", "pictures", "music",
@@ -432,14 +432,16 @@ class CleanerApp:
     def _build_style(self):
         style = ttk.Style()
         style.theme_use("clam")
-        style.configure("TFrame", background="#1e1e1e")
-        style.configure("TLabel", background="#1e1e1e", foreground="#e0e0e0", font=("Segoe UI", 10))
-        style.configure("Header.TLabel", background="#1e1e1e", foreground="#ffffff", font=("Segoe UI", 14, "bold"))
-        style.configure("TButton", font=("Segoe UI", 10, "bold"), padding=6)
-        style.configure("TCheckbutton", background="#1e1e1e", foreground="#e0e0e0", font=("Segoe UI", 9))
-        style.configure("Treeview", background="#2b2b2b", foreground="#e0e0e0", fieldbackground="#2b2b2b", rowheight=24)
-        style.configure("Treeview.Heading", font=("Segoe UI", 9, "bold"))
-        style.map("Treeview", background=[("selected", "#3a6ea5")])
+        style.configure("TFrame", background="#111827")
+        style.configure("TLabel", background="#111827", foreground="#f3f4f6", font=("Segoe UI", 10))
+        style.configure("Header.TLabel", background="#111827", foreground="#06b6d4", font=("Segoe UI", 14, "bold"))
+        style.configure("TButton", font=("Segoe UI", 10, "bold"), padding=6, background="#3b82f6", foreground="#ffffff")
+        style.map("TButton", background=[("active", "#2563eb"), ("pressed", "#1d4ed8")])
+        style.configure("TCheckbutton", background="#111827", foreground="#f3f4f6", font=("Segoe UI", 9))
+        style.configure("Treeview", background="#1f2937", foreground="#f3f4f6", fieldbackground="#1f2937", rowheight=24)
+        style.configure("Treeview.Heading", background="#374151", foreground="#f3f4f6", font=("Segoe UI", 9, "bold"))
+        style.map("Treeview", background=[("selected", "#06b6d4")], foreground=[("selected", "#111827")])
+        self.root.configure(bg="#111827")
     def _build_ui(self):
         header = ttk.Frame(self.root)
         header.pack(fill="x", padx=15, pady=(15, 5))
@@ -454,7 +456,12 @@ class CleanerApp:
         self.deselect_all_btn.pack(side="left", padx=(0, 8))
         dry_chk = ttk.Checkbutton(toolbar, text="وضع المعاينة فقط (بدون حذف فعلي)", variable=self.dry_run_var)
         dry_chk.pack(side="left", padx=(20, 0))
-        self.clean_btn = ttk.Button(toolbar, text="إنشاء نقطة استعادة وبدء التنظيف", command=self.start_cleanup)
+        
+        self.restore_var = tk.BooleanVar(value=True)
+        restore_chk = ttk.Checkbutton(toolbar, text="إنشاء نقطة استعادة", variable=self.restore_var)
+        restore_chk.pack(side="left", padx=(20, 0))
+        
+        self.clean_btn = ttk.Button(toolbar, text="بدء التنظيف", command=self.start_cleanup)
         self.clean_btn.pack(side="right")
         list_frame = ttk.Frame(self.root)
         list_frame.pack(fill="both", expand=True, padx=15, pady=5)
@@ -484,8 +491,8 @@ class CleanerApp:
         log_frame = ttk.Frame(self.root)
         log_frame.pack(fill="both", expand=False, padx=15, pady=(0, 15))
         ttk.Label(log_frame, text="السجل:").pack(anchor="w")
-        self.log_text = scrolledtext.ScrolledText(log_frame, height=10, bg="#121212", fg="#9be39b",
-                                                    insertbackground="#9be39b", font=("Consolas", 9))
+        self.log_text = scrolledtext.ScrolledText(log_frame, height=10, bg="#1f2937", fg="#06b6d4",
+                                                    insertbackground="#06b6d4", font=("Consolas", 9))
         self.log_text.pack(fill="both", expand=True)
     def log(self, msg):
         timestamp = datetime.now().strftime("%H:%M:%S")
@@ -597,10 +604,10 @@ class CleanerApp:
         self.clean_btn.config(state="disabled")
         threading.Thread(target=self._cleanup_worker, args=(selected, dry), daemon=True).start()
     def _cleanup_worker(self, selected, dry):
-        if not dry:
+        if not dry and self.restore_var.get():
             create_restore_point(self.log)
-        else:
-            self.log("وضع المعاينة مفعّل — لن يتم إنشاء نقطة استعادة ولا حذف فعلي.")
+        elif dry:
+            self.log("وضع المعاينة مفعّل — لن يتم حذف فعلي.")
         self.log("جاري التنظيف...")
         freed, deleted, errors = run_cleanup(selected, self.log, self.set_progress, dry)
         self.log("=" * 50)
