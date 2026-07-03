@@ -12,7 +12,7 @@ from pathlib import Path
 from datetime import datetime
 import tkinter as tk
 from tkinter import ttk, messagebox, scrolledtext
-APP_NAME = "PC Cleaner Pro"
+APP_NAME = "cleaner"
 LOG_PATH = os.path.join(os.environ.get("USERPROFILE", "."), "pc_cleaner_log.txt")
 PROTECTED_KEYWORDS = [
     "downloads", "desktop", "videos", "documents", "pictures", "music",
@@ -443,7 +443,7 @@ class CleanerApp:
     def _build_ui(self):
         header = ttk.Frame(self.root)
         header.pack(fill="x", padx=15, pady=(15, 5))
-        ttk.Label(header, text="PC Cleaner Pro — تنظيف القرص C", style="Header.TLabel").pack(side="left")
+        ttk.Label(header, text="cleaner — تنظيف القرص C", style="Header.TLabel").pack(side="left")
         toolbar = ttk.Frame(self.root)
         toolbar.pack(fill="x", padx=15, pady=5)
         self.scan_btn = ttk.Button(toolbar, text="فحص الجهاز", command=self.start_scan)
