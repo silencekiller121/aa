@@ -12,7 +12,7 @@ from pathlib import Path
 from datetime import datetime
 import tkinter as tk
 from tkinter import ttk, messagebox, scrolledtext
-APP_NAME = "Cleaner Pro"
+APP_NAME = "PC Cleaner Pro"
 LOG_PATH = os.path.join(os.environ.get("USERPROFILE", "."), "pc_cleaner_log.txt")
 PROTECTED_KEYWORDS = [
     "downloads", "desktop", "videos", "documents", "pictures", "music",
