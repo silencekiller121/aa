@@ -12,7 +12,7 @@ from pathlib import Path
 from datetime import datetime
 import tkinter as tk
 from tkinter import ttk, messagebox, scrolledtext
-APP_NAME = "cleaner v0.1"
+APP_NAME = "cleaner v0.2"
 LOG_PATH = os.path.join(os.environ.get("USERPROFILE", "."), "pc_cleaner_log.txt")
 PROTECTED_KEYWORDS = [
     "downloads", "desktop", "videos", "documents", "pictures", "music",
@@ -435,8 +435,8 @@ class CleanerApp:
         style.configure("TFrame", background="#111827")
         style.configure("TLabel", background="#111827", foreground="#f3f4f6", font=("Segoe UI", 10))
         style.configure("Header.TLabel", background="#111827", foreground="#06b6d4", font=("Segoe UI", 14, "bold"))
-        style.configure("TButton", font=("Segoe UI", 10, "bold"), padding=6, background="#3b82f6", foreground="#ffffff")
-        style.map("TButton", background=[("active", "#2563eb"), ("pressed", "#1d4ed8")])
+        style.configure("TButton", font=("Segoe UI", 10, "bold"), padding=6, background="#22c55e", foreground="#ffffff")
+        style.map("TButton", background=[("active", "#16a34a"), ("pressed", "#15803d")])
         style.configure("TCheckbutton", background="#111827", foreground="#f3f4f6", font=("Segoe UI", 9))
         style.configure("Treeview", background="#1f2937", foreground="#f3f4f6", fieldbackground="#1f2937", rowheight=24)
         style.configure("Treeview.Heading", background="#374151", foreground="#f3f4f6", font=("Segoe UI", 9, "bold"))
@@ -445,7 +445,7 @@ class CleanerApp:
     def _build_ui(self):
         header = ttk.Frame(self.root)
         header.pack(fill="x", padx=15, pady=(15, 5))
-        ttk.Label(header, text="cleaner — تنظيف القرص C", style="Header.TLabel").pack(side="left")
+        ttk.Label(header, text="cleaner v0.2 — تنظيف القرص C", style="Header.TLabel").pack(side="left")
         toolbar = ttk.Frame(self.root)
         toolbar.pack(fill="x", padx=15, pady=5)
         self.scan_btn = ttk.Button(toolbar, text="فحص الجهاز", command=self.start_scan)
