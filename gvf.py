@@ -434,18 +434,20 @@ class CleanerApp:
         style.theme_use("clam")
         style.configure("TFrame", background="#111827")
         style.configure("TLabel", background="#111827", foreground="#f3f4f6", font=("Segoe UI", 10))
-        style.configure("Header.TLabel", background="#111827", foreground="#06b6d4", font=("Segoe UI", 14, "bold"))
+        style.configure("Header.TLabel", background="#111827", foreground="#22c55e", font=("Segoe UI", 14, "bold"))
         style.configure("TButton", font=("Segoe UI", 10, "bold"), padding=6, background="#22c55e", foreground="#ffffff")
         style.map("TButton", background=[("active", "#16a34a"), ("pressed", "#15803d")])
         style.configure("TCheckbutton", background="#111827", foreground="#f3f4f6", font=("Segoe UI", 9))
         style.configure("Treeview", background="#1f2937", foreground="#f3f4f6", fieldbackground="#1f2937", rowheight=24)
         style.configure("Treeview.Heading", background="#374151", foreground="#f3f4f6", font=("Segoe UI", 9, "bold"))
         style.map("Treeview", background=[("selected", "#06b6d4")], foreground=[("selected", "#111827")])
+        style.configure("Horizontal.TProgressbar", troughcolor="#1f2937", background="#22c55e",
+                         bordercolor="#1f2937", lightcolor="#22c55e", darkcolor="#22c55e")
         self.root.configure(bg="#111827")
     def _build_ui(self):
         header = ttk.Frame(self.root)
         header.pack(fill="x", padx=15, pady=(15, 5))
-        ttk.Label(header, text="cleaner v0.2 — تنظيف القرص C", style="Header.TLabel").pack(side="left")
+        ttk.Label(header, text="تنظيف القرص C", style="Header.TLabel").pack(side="left")
         toolbar = ttk.Frame(self.root)
         toolbar.pack(fill="x", padx=15, pady=5)
         self.scan_btn = ttk.Button(toolbar, text="فحص الجهاز", command=self.start_scan)
@@ -492,13 +494,21 @@ class CleanerApp:
         log_frame.pack(fill="both", expand=False, padx=15, pady=(0, 15))
         ttk.Label(log_frame, text="السجل:").pack(anchor="w")
         self.log_text = scrolledtext.ScrolledText(log_frame, height=10, bg="#1f2937", fg="#06b6d4",
-                                                    insertbackground="#06b6d4", font=("Consolas", 9))
+                                                    insertbackground="#06b6d4", font=("Consolas", 9),
+                                                    state="disabled", cursor="arrow", takefocus=0)
         self.log_text.pack(fill="both", expand=True)
+        self.log_text.bind("<Button-1>", lambda e: "break")
+        self.log_text.bind("<B1-Motion>", lambda e: "break")
+        self.log_text.bind("<Double-Button-1>", lambda e: "break")
+        self.log_text.bind("<Triple-Button-1>", lambda e: "break")
+        self.log_text.bind("<Key>", lambda e: "break")
     def log(self, msg):
         timestamp = datetime.now().strftime("%H:%M:%S")
         line = f"[{timestamp}] {msg}"
+        self.log_text.config(state="normal")
         self.log_text.insert("end", line + "\n")
         self.log_text.see("end")
+        self.log_text.config(state="disabled")
         self.root.update_idletasks()
         try:
             with open(LOG_PATH, "a", encoding="utf-8") as f:
@@ -509,6 +519,15 @@ class CleanerApp:
         self.progress["maximum"] = max(total, 1)
         self.progress["value"] = current
         self.root.update_idletasks()
+    def _update_freed_progress(self, freed):
+        try:
+            total, used, free = shutil.disk_usage("C:\\")
+        except Exception:
+            total = 0
+        percent = (freed / total * 100) if total > 0 else 0
+        percent = max(0, min(percent, 100))
+        self.progress["maximum"] = 100
+        self.progress["value"] = percent
     def on_tree_click(self, event):
         region = self.tree.identify("region", event.x, event.y)
         if region != "cell":
@@ -614,6 +633,7 @@ class CleanerApp:
         self.log(f"{'[معاينة] ' if dry else ''}اكتمل. عناصر تم حذفها: {deleted} | أخطاء: {errors}")
         self.log(f"{'المساحة المتوقع تحريرها' if dry else 'المساحة المحررة'}: {human_size(freed)}")
         self.log("=" * 50)
+        self.root.after(0, lambda: self._update_freed_progress(freed))
         self.cleaning = False
         self.scan_btn.config(state="normal")
         self.clean_btn.config(state="normal")
