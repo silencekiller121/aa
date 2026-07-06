@@ -19,6 +19,11 @@ try:
 except ImportError:
     psutil = None
 
+try:
+    import yt_dlp
+except ImportError:
+    yt_dlp = None
+
 APP_NAME = "PC Suite Pro"
 LOG_PATH = os.path.join(os.environ.get("USERPROFILE", "."), "pc_suite_pro_log.txt")
 DISABLED_STARTUP_JSON = os.path.join(os.environ.get("USERPROFILE", "."), "pc_suite_pro_disabled_startup.json")
@@ -1145,6 +1150,7 @@ NAV_ITEMS = [
     ("network", "🌐 مراقب الشبكة"),
     ("booster", "⚡ معزز الأداء لبرنامج محدد"),
     ("boost", "🎮 تعزيز FPS الشامل"),
+    ("downloader", "⬇️ تحميل الفيديوهات"),
 ]
 
 BG_MAIN = "#111827"
@@ -2165,6 +2171,166 @@ class BoostFrame(tk.Frame):
             self._log(f"حدث خطأ أثناء الاستعادة: {e}")
 
 
+class VideoDownloaderFrame(tk.Frame):
+    def __init__(self, parent, controller):
+        super().__init__(parent, bg=BG_MAIN)
+        self.controller = controller
+        self.formats_data = []
+        self.output_dir = os.path.join(get_user_profile(), "Downloads")
+        self._build_ui()
+
+    def _build_ui(self):
+        section_title(self, "تحميل الفيديوهات").pack(anchor="w", padx=20, pady=(20, 10))
+        tk.Label(self, text="يدعم يوتيوب وتيك توك وإنستقرام وأي منصة أخرى مدعومة من مكتبة yt-dlp.",
+                 bg=BG_MAIN, fg=FG_TEXT, font=("Segoe UI", 9)).pack(anchor="w", padx=20)
+
+        url_row = tk.Frame(self, bg=BG_MAIN)
+        url_row.pack(fill="x", padx=20, pady=(15, 5))
+        tk.Label(url_row, text="رابط الفيديو:", bg=BG_MAIN, fg=FG_TEXT).pack(side="left")
+        self.url_var = tk.StringVar()
+        ttk.Entry(url_row, textvariable=self.url_var, width=55).pack(side="left", padx=8)
+        ttk.Button(url_row, text="جلب الجودات المتاحة", command=self.fetch_formats).pack(side="left", padx=8)
+
+        wrapper, self.tree = make_treeview(
+            self, ("quality", "ext", "size", "kind", "fps"),
+            ("الجودة", "الامتداد", "الحجم التقريبي", "النوع", "FPS"), (110, 70, 130, 130, 60))
+        wrapper.pack(fill="both", expand=True, padx=20, pady=10)
+
+        out_row = tk.Frame(self, bg=BG_MAIN)
+        out_row.pack(fill="x", padx=20, pady=(0, 5))
+        tk.Label(out_row, text="مجلد الحفظ:", bg=BG_MAIN, fg=FG_TEXT).pack(side="left")
+        self.output_label = tk.Label(out_row, text=self.output_dir, bg=BG_MAIN, fg=ACCENT2, font=("Segoe UI", 9))
+        self.output_label.pack(side="left", padx=8)
+        ttk.Button(out_row, text="تغيير المجلد", command=self.choose_folder).pack(side="left", padx=8)
+
+        actions = tk.Frame(self, bg=BG_MAIN)
+        actions.pack(fill="x", padx=20, pady=10)
+        ttk.Button(actions, text="⬇️ تحميل بالجودة المحددة", command=self.download_selected).pack(side="left")
+
+        self.progress = ttk.Progressbar(self, orient="horizontal", mode="determinate")
+        self.progress.pack(fill="x", padx=20, pady=(5, 5))
+        self.status_label = tk.Label(self, text="", bg=BG_MAIN, fg=FG_TEXT, font=("Segoe UI", 9))
+        self.status_label.pack(anchor="w", padx=20, pady=(0, 15))
+
+    def on_show(self):
+        pass
+
+    def on_hide(self):
+        pass
+
+    def fetch_formats(self):
+        url = self.url_var.get().strip()
+        if not url:
+            messagebox.showinfo(APP_NAME, "أدخل رابط الفيديو أولاً.")
+            return
+        if yt_dlp is None:
+            messagebox.showerror(APP_NAME, "المكتبة yt-dlp غير مثبتة.\nنفّذ: pip install yt-dlp")
+            return
+        for row in self.tree.get_children():
+            self.tree.delete(row)
+        self.formats_data = []
+        self.status_label.config(text="جاري جلب الجودات المتاحة...")
+        threading.Thread(target=self._fetch_worker, args=(url,), daemon=True).start()
+
+    def _fetch_worker(self, url):
+        try:
+            opts = {"quiet": True, "no_warnings": True, "skip_download": True}
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                info = ydl.extract_info(url, download=False)
+        except Exception as e:
+            self.after(0, lambda: self.status_label.config(text=f"تعذر جلب المعلومات: {e}"))
+            return
+        formats = info.get("formats") or []
+        rows = []
+        for f in formats:
+            vcodec = f.get("vcodec") or "none"
+            acodec = f.get("acodec") or "none"
+            if vcodec == "none" and acodec == "none":
+                continue
+            height = f.get("height") or 0
+            if vcodec == "none":
+                quality = f"صوت فقط ({f.get('abr') or '?'} kbps)"
+                kind = "صوت فقط"
+            else:
+                quality = f"{height}p" if height else (f.get("format_note") or "غير معروف")
+                kind = "فيديو+صوت" if acodec != "none" else "فيديو فقط"
+            size = f.get("filesize") or f.get("filesize_approx")
+            rows.append({
+                "format_id": f.get("format_id"),
+                "ext": f.get("ext") or "",
+                "quality": quality,
+                "height": height,
+                "size": human_size(size) if size else "غير معروف",
+                "kind": kind,
+                "fps": f.get("fps") or "",
+            })
+        rows.sort(key=lambda r: r["height"], reverse=True)
+        title = info.get("title", "")
+        self.after(0, lambda: self._populate(rows, title))
+
+    def _populate(self, rows, title):
+        self.formats_data = rows
+        for row in self.tree.get_children():
+            self.tree.delete(row)
+        for r in rows:
+            self.tree.insert("", "end", values=(r["quality"], r["ext"], r["size"], r["kind"], r["fps"]))
+        self.status_label.config(
+            text=f"تم العثور على {len(rows)} جودة - {title}" if rows else "لم يتم العثور على أي جودة لهذا الرابط.")
+
+    def choose_folder(self):
+        d = filedialog.askdirectory()
+        if d:
+            self.output_dir = d
+            self.output_label.config(text=d)
+
+    def download_selected(self):
+        if yt_dlp is None:
+            messagebox.showerror(APP_NAME, "المكتبة yt-dlp غير مثبتة.\nنفّذ: pip install yt-dlp")
+            return
+        sel = self.tree.selection()
+        if not sel:
+            messagebox.showinfo(APP_NAME, "اختر جودة من القائمة أولاً.")
+            return
+        url = self.url_var.get().strip()
+        if not url:
+            return
+        idx = self.tree.index(sel[0])
+        fmt = self.formats_data[idx]
+        self.progress["value"] = 0
+        self.status_label.config(text="جاري التحميل...")
+        threading.Thread(target=self._download_worker, args=(url, fmt), daemon=True).start()
+
+    def _download_worker(self, url, fmt):
+        format_id = fmt["format_id"]
+        format_selector = f"{format_id}+bestaudio/best" if fmt["kind"] == "فيديو فقط" else format_id
+        outtmpl = os.path.join(self.output_dir, "%(title)s.%(ext)s")
+
+        def hook(d):
+            if d.get("status") == "downloading":
+                total = d.get("total_bytes") or d.get("total_bytes_estimate")
+                downloaded = d.get("downloaded_bytes", 0)
+                if total:
+                    pct = downloaded / total * 100
+                    self.after(0, lambda: self.progress.config(value=pct))
+            elif d.get("status") == "finished":
+                self.after(0, lambda: self.progress.config(value=100))
+
+        opts = {
+            "format": format_selector,
+            "outtmpl": outtmpl,
+            "quiet": True,
+            "no_warnings": True,
+            "progress_hooks": [hook],
+            "merge_output_format": "mp4",
+        }
+        try:
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                ydl.download([url])
+            self.after(0, lambda: self.status_label.config(text=f"تم التحميل بنجاح إلى: {self.output_dir}"))
+        except Exception as e:
+            self.after(0, lambda: self.status_label.config(text=f"فشل التحميل: {e}"))
+
+
 class MainApp:
     def __init__(self, root):
         self.root = root
@@ -2220,6 +2386,7 @@ class MainApp:
             "network": NetworkFrame,
             "booster": BoosterFrame,
             "boost": BoostFrame,
+            "downloader": VideoDownloaderFrame,
         }
         self.frames = {}
         for key, cls in classes.items():
