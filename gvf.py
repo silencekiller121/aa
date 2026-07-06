@@ -2218,6 +2218,8 @@ class VideoDownloaderFrame(tk.Frame):
     def on_hide(self):
         pass
 
+    FIXED_QUALITIES = [1080, 720, 480, 360]
+
     def fetch_formats(self):
         url = self.url_var.get().strip()
         if not url:
@@ -2228,54 +2230,19 @@ class VideoDownloaderFrame(tk.Frame):
             return
         for row in self.tree.get_children():
             self.tree.delete(row)
-        self.formats_data = []
-        self.status_label.config(text="جاري جلب الجودات المتاحة...")
-        threading.Thread(target=self._fetch_worker, args=(url,), daemon=True).start()
-
-    def _fetch_worker(self, url):
-        try:
-            opts = {"quiet": True, "no_warnings": True, "skip_download": True}
-            with yt_dlp.YoutubeDL(opts) as ydl:
-                info = ydl.extract_info(url, download=False)
-        except Exception as e:
-            self.after(0, lambda: self.status_label.config(text=f"تعذر جلب المعلومات: {e}"))
-            return
-        formats = info.get("formats") or []
-        rows = []
-        for f in formats:
-            vcodec = f.get("vcodec") or "none"
-            acodec = f.get("acodec") or "none"
-            if vcodec == "none" and acodec == "none":
-                continue
-            height = f.get("height") or 0
-            if vcodec == "none":
-                quality = f"صوت فقط ({f.get('abr') or '?'} kbps)"
-                kind = "صوت فقط"
-            else:
-                quality = f"{height}p" if height else (f.get("format_note") or "غير معروف")
-                kind = "فيديو+صوت" if acodec != "none" else "فيديو فقط"
-            size = f.get("filesize") or f.get("filesize_approx")
-            rows.append({
-                "format_id": f.get("format_id"),
-                "ext": f.get("ext") or "",
-                "quality": quality,
-                "height": height,
-                "size": human_size(size) if size else "غير معروف",
-                "kind": kind,
-                "fps": f.get("fps") or "",
-            })
-        rows.sort(key=lambda r: r["height"], reverse=True)
-        title = info.get("title", "")
-        self.after(0, lambda: self._populate(rows, title))
-
-    def _populate(self, rows, title):
+        rows = [{
+            "format_id": None,
+            "ext": "mp4",
+            "quality": f"{h}p",
+            "height": h,
+            "size": "يعتمد على الفيديو",
+            "kind": "فيديو+صوت",
+            "fps": "",
+        } for h in self.FIXED_QUALITIES]
         self.formats_data = rows
-        for row in self.tree.get_children():
-            self.tree.delete(row)
         for r in rows:
             self.tree.insert("", "end", values=(r["quality"], r["ext"], r["size"], r["kind"], r["fps"]))
-        self.status_label.config(
-            text=f"تم العثور على {len(rows)} جودة - {title}" if rows else "لم يتم العثور على أي جودة لهذا الرابط.")
+        self.status_label.config(text="اختر الجودة المطلوبة ثم اضغط تحميل.")
 
     def choose_folder(self):
         d = filedialog.askdirectory()
@@ -2301,8 +2268,8 @@ class VideoDownloaderFrame(tk.Frame):
         threading.Thread(target=self._download_worker, args=(url, fmt), daemon=True).start()
 
     def _download_worker(self, url, fmt):
-        format_id = fmt["format_id"]
-        format_selector = f"{format_id}+bestaudio/best" if fmt["kind"] == "فيديو فقط" else format_id
+        height = fmt["height"]
+        format_selector = f"bestvideo[height<={height}]+bestaudio/best[height<={height}]/best"
         outtmpl = os.path.join(self.output_dir, "%(title)s.%(ext)s")
 
         def hook(d):
