@@ -1,36 +1,53 @@
 import os
 import sys
-import ctypes
 import shutil
 import subprocess
 import threading
 import time
 import json
 import platform
-import winreg
 import urllib.request
+import zipfile
 from pathlib import Path
 from datetime import datetime
-import tkinter as tk
-from tkinter import ttk, messagebox, scrolledtext, filedialog
-
+try:
+    import ctypes
+except Exception:
+    ctypes = None
+try:
+    import winreg
+except Exception:
+    winreg = None
 try:
     import psutil
 except ImportError:
     psutil = None
-
 try:
     import yt_dlp
 except ImportError:
     yt_dlp = None
-
+from PySide6.QtCore import (
+    Qt, QThread, Signal, QObject, QTimer, QSize, QPoint, QRectF, QEasingCurve,
+    QPropertyAnimation, Property,
+)
+from PySide6.QtGui import (
+    QIcon, QFont, QPixmap, QPainter, QColor, QLinearGradient, QPen, QBrush,
+    QPainterPath, QCursor,
+)
+from PySide6.QtWidgets import (
+    QApplication, QWidget, QMainWindow, QVBoxLayout, QHBoxLayout, QGridLayout,
+    QLabel, QLineEdit, QPushButton, QFileDialog, QMessageBox, QCheckBox,
+    QFrame, QGraphicsDropShadowEffect, QStackedWidget, QTableWidget,
+    QTableWidgetItem, QHeaderView, QAbstractItemView, QComboBox, QScrollArea,
+    QPlainTextEdit, QProgressBar, QSizePolicy, QSpacerItem, QSpinBox,
+    QTextEdit, QToolButton,
+)
 APP_NAME = "PC Suite Pro"
-LOG_PATH = os.path.join(os.environ.get("USERPROFILE", "."), "pc_suite_pro_log.txt")
-DISABLED_STARTUP_JSON = os.path.join(os.environ.get("USERPROFILE", "."), "pc_suite_pro_disabled_startup.json")
-BOOST_BACKUP_JSON = os.path.join(os.environ.get("USERPROFILE", "."), "pc_suite_pro_boost_backup.json")
-
+APP_INITIALS = "PS"
+LOG_PATH = os.path.join(os.environ.get("USERPROFILE", str(Path.home())), "pc_suite_pro_log.txt")
+DISABLED_STARTUP_JSON = os.path.join(os.environ.get("USERPROFILE", str(Path.home())), "pc_suite_pro_disabled_startup.json")
+BOOST_BACKUP_JSON = os.path.join(os.environ.get("USERPROFILE", str(Path.home())), "pc_suite_pro_boost_backup.json")
 HIGH_PERF_POWER_GUID = "8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c"
-
 TWEAK_SERVICES = {
     "DiagTrack": "خدمة تتبع الأحداث المتصلة (تيليمتري Microsoft)",
     "dmwappushsvc": "خدمة توجيه رسائل WAP Push",
@@ -43,33 +60,30 @@ TWEAK_SERVICES = {
     "MapsBroker": "وسيط الخرائط غير المتصلة",
     "Fax": "خدمة الفاكس",
 }
-
 REGISTRY_TWEAKS = [
     {"id": "gamedvr", "label": "تعطيل تسجيل الألعاب في الخلفية (Xbox Game Bar / Game DVR)",
-     "hive": winreg.HKEY_CURRENT_USER, "path": r"System\GameConfigStore",
-     "name": "GameDVR_Enabled", "type": winreg.REG_DWORD, "boost": 0},
+     "hive": "HKCU", "path": r"System\GameConfigStore",
+     "name": "GameDVR_Enabled", "type": "DWORD", "boost": 0},
     {"id": "appcapture", "label": "تعطيل تسجيل الألعاب التلقائي",
-     "hive": winreg.HKEY_CURRENT_USER, "path": r"Software\Microsoft\Windows\CurrentVersion\GameDVR",
-     "name": "AppCaptureEnabled", "type": winreg.REG_DWORD, "boost": 0},
+     "hive": "HKCU", "path": r"Software\Microsoft\Windows\CurrentVersion\GameDVR",
+     "name": "AppCaptureEnabled", "type": "DWORD", "boost": 0},
     {"id": "bgapps", "label": "تعطيل تطبيقات الخلفية",
-     "hive": winreg.HKEY_CURRENT_USER, "path": r"Software\Microsoft\Windows\CurrentVersion\BackgroundAccessApplications",
-     "name": "GlobalUserDisabled", "type": winreg.REG_DWORD, "boost": 1},
+     "hive": "HKCU", "path": r"Software\Microsoft\Windows\CurrentVersion\BackgroundAccessApplications",
+     "name": "GlobalUserDisabled", "type": "DWORD", "boost": 1},
     {"id": "tips", "label": "تعطيل نصائح واقتراحات ويندوز",
-     "hive": winreg.HKEY_CURRENT_USER, "path": r"Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager",
-     "name": "SystemPaneSuggestionsEnabled", "type": winreg.REG_DWORD, "boost": 0},
+     "hive": "HKCU", "path": r"Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager",
+     "name": "SystemPaneSuggestionsEnabled", "type": "DWORD", "boost": 0},
     {"id": "silenthours", "label": "تعطيل الإشعارات المنبثقة غير الضرورية",
-     "hive": winreg.HKEY_CURRENT_USER, "path": r"Software\Microsoft\Windows\CurrentVersion\PushNotifications",
-     "name": "ToastEnabled", "type": winreg.REG_DWORD, "boost": 0},
+     "hive": "HKCU", "path": r"Software\Microsoft\Windows\CurrentVersion\PushNotifications",
+     "name": "ToastEnabled", "type": "DWORD", "boost": 0},
     {"id": "visualfx", "label": "ضبط المؤثرات البصرية على أفضل أداء",
-     "hive": winreg.HKEY_CURRENT_USER, "path": r"Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects",
-     "name": "VisualFXSetting", "type": winreg.REG_DWORD, "boost": 2},
+     "hive": "HKCU", "path": r"Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects",
+     "name": "VisualFXSetting", "type": "DWORD", "boost": 2},
 ]
-
 BOOST_EXTRA_OPTIONS = [
     ("nagle", "تحسين استجابة الشبكة (تعطيل خوارزمية Nagle لتقليل تأخير الألعاب)"),
     ("power", "تفعيل خطة الطاقة (أداء عالٍ) طوال فترة التعزيز"),
 ]
-
 PROTECTED_KEYWORDS = [
     "downloads", "desktop", "videos", "documents", "pictures", "music",
     "onedrive", "steam", "steamapps", "epic games", "epicgames",
@@ -78,17 +92,14 @@ PROTECTED_KEYWORDS = [
     "rockstar games", "xbox games",
 ]
 PROTECTED_PATHS_ABS = []
-
 CRITICAL_PROCESSES = {
     "system", "system idle process", "registry", "smss.exe", "csrss.exe",
     "wininit.exe", "services.exe", "lsass.exe", "winlogon.exe", "svchost.exe",
     "dwm.exe", "explorer.exe", "fontdrvhost.exe", "wudfhost.exe",
 }
-
 HIGH_IMPACT_KEYWORDS = ["adobe", "onedrive", "skype", "spotify", "steam", "discord",
                          "teams", "dropbox", "epic", "origin", "battle.net", "creative cloud", "zoom"]
 MED_IMPACT_KEYWORDS = ["update", "helper", "agent", "sync", "launcher"]
-
 EXT_CATEGORIES = {
     "صور": {".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp", ".heic"},
     "فيديو": {".mp4", ".mkv", ".avi", ".mov", ".wmv", ".flv"},
@@ -96,40 +107,220 @@ EXT_CATEGORIES = {
     "تنفيذية": {".exe", ".msi"},
     "أرشيف": {".zip", ".rar", ".7z", ".tar", ".gz"},
 }
-
-
+NAV_ITEMS = [
+    ("cleaner", "تنظيف القرص", "🧹"),
+    ("dashboard", "لوحة الأداء", "📊"),
+    ("processes", "إدارة العمليات", "🧠"),
+    ("startup", "محسّن الإقلاع", "🚀"),
+    ("explorer", "مستكشف الملفات", "📁"),
+    ("sysinfo", "معلومات النظام", "🧾"),
+    ("network", "مراقب الشبكة", "🌐"),
+    ("booster", "معزز برنامج محدد", "⚡"),
+    ("boost", "تعزيز FPS الشامل", "🎮"),
+    ("downloader", "تحميل الفيديوهات", "⬇️"),
+]
+PALETTES = {
+    "dark": {
+        "app_bg": "#05070c",
+        "sidebar_top": "#0b101c",
+        "sidebar_bottom": "#070a12",
+        "panel": "#111827",
+        "panel_alt": "#161f2e",
+        "panel_border": "#1f2937",
+        "input_bg": "#0d1420",
+        "text": "#eef2f7",
+        "text_dim": "#8b96ac",
+        "text_faint": "#5b6478",
+        "accent": "#27e07a",
+        "accent_hover": "#4dffa0",
+        "accent2": "#22d3ee",
+        "accent2_hover": "#5ee8fb",
+        "purple": "#a855f7",
+        "warn": "#fbbf24",
+        "danger": "#f8697a",
+        "danger_hover": "#ff8494",
+        "shadow": QColor(0, 0, 0, 190),
+        "glow_accent": QColor(39, 224, 122, 110),
+        "glow_accent2": QColor(34, 211, 238, 110),
+        "scrollbar": "#1f2937",
+    },
+    "light": {
+        "app_bg": "#eef1f6",
+        "sidebar_top": "#ffffff",
+        "sidebar_bottom": "#f3f5f9",
+        "panel": "#ffffff",
+        "panel_alt": "#f6f8fb",
+        "panel_border": "#e2e6ee",
+        "input_bg": "#f3f5f9",
+        "text": "#12172a",
+        "text_dim": "#5b6478",
+        "text_faint": "#8b96ac",
+        "accent": "#16a34a",
+        "accent_hover": "#15803d",
+        "accent2": "#0891b2",
+        "accent2_hover": "#0e7490",
+        "purple": "#7c3aed",
+        "warn": "#d97706",
+        "danger": "#dc2626",
+        "danger_hover": "#b91c1c",
+        "shadow": QColor(30, 41, 59, 45),
+        "glow_accent": QColor(22, 163, 74, 60),
+        "glow_accent2": QColor(8, 145, 178, 60),
+        "scrollbar": "#e2e6ee",
+    },
+}
+class ThemeBus(QObject):
+    changed = Signal(bool)
+theme_bus = ThemeBus()
+CURRENT_THEME = {"dark": True}
+def palette():
+    return PALETTES["dark" if CURRENT_THEME["dark"] else "light"]
+def build_stylesheet():
+    p = palette()
+    return f"""
+    QWidget {{
+        background-color: {p['app_bg']};
+        color: {p['text']};
+        font-family: 'Segoe UI';
+        font-size: 13px;
+    }}
+    QToolTip {{
+        background-color: {p['panel_alt']};
+        color: {p['text']};
+        border: 1px solid {p['panel_border']};
+        padding: 6px 10px;
+        border-radius: 6px;
+    }}
+    QScrollBar:vertical {{
+        background: transparent;
+        width: 10px;
+        margin: 2px;
+    }}
+    QScrollBar::handle:vertical {{
+        background: {p['scrollbar']};
+        border-radius: 5px;
+        min-height: 30px;
+    }}
+    QScrollBar::handle:vertical:hover {{ background: {p['accent']}; }}
+    QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}
+    QScrollBar:horizontal {{ height: 0; }}
+    QLineEdit, QComboBox, QSpinBox {{
+        background-color: {p['input_bg']};
+        border: 1px solid {p['panel_border']};
+        border-radius: 8px;
+        padding: 7px 12px;
+        color: {p['text']};
+        selection-background-color: {p['accent']};
+    }}
+    QLineEdit:focus, QComboBox:focus, QSpinBox:focus {{
+        border: 1px solid {p['accent']};
+    }}
+    QComboBox::drop-down {{ border: none; width: 24px; }}
+    QComboBox QAbstractItemView {{
+        background-color: {p['panel_alt']};
+        color: {p['text']};
+        border: 1px solid {p['panel_border']};
+        selection-background-color: {p['accent']};
+        outline: none;
+    }}
+    QPlainTextEdit, QTextEdit {{
+        background-color: {p['panel_alt']};
+        border: 1px solid {p['panel_border']};
+        border-radius: 10px;
+        color: {p['accent2']};
+        font-family: 'Consolas';
+        font-size: 12px;
+        padding: 8px;
+    }}
+    QTableWidget {{
+        background-color: {p['panel']};
+        alternate-background-color: {p['panel_alt']};
+        border: 1px solid {p['panel_border']};
+        border-radius: 10px;
+        gridline-color: transparent;
+        color: {p['text']};
+        selection-background-color: {p['accent']}55;
+        selection-color: {p['text']};
+    }}
+    QTableWidget::item {{
+        padding: 7px;
+        border-bottom: 1px solid {p['panel_border']};
+    }}
+    QHeaderView::section {{
+        background-color: {p['panel_alt']};
+        color: {p['text_dim']};
+        border: none;
+        border-bottom: 2px solid {p['panel_border']};
+        padding: 9px 8px;
+        font-weight: 600;
+    }}
+    QProgressBar {{
+        background-color: {p['panel_alt']};
+        border: 1px solid {p['panel_border']};
+        border-radius: 8px;
+        text-align: center;
+        color: {p['text']};
+        height: 16px;
+    }}
+    QProgressBar::chunk {{
+        border-radius: 7px;
+        background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+            stop:0 {p['accent']}, stop:1 {p['accent2']});
+    }}
+    QCheckBox {{ spacing: 8px; color: {p['text']}; }}
+    QCheckBox::indicator {{
+        width: 17px; height: 17px; border-radius: 5px;
+        border: 1px solid {p['panel_border']};
+        background-color: {p['input_bg']};
+    }}
+    QCheckBox::indicator:checked {{
+        background-color: {p['accent']};
+        border: 1px solid {p['accent']};
+    }}
+    QMessageBox {{ background-color: {p['panel']}; }}
+    QMessageBox QLabel {{ color: {p['text']}; }}
+    QMessageBox QPushButton {{
+        background-color: {p['panel_alt']}; color: {p['text']};
+        border-radius: 6px; padding: 7px 18px; border: 1px solid {p['panel_border']};
+    }}
+    QMessageBox QPushButton:hover {{ background-color: {p['accent']}33; }}
+    """
+def accent_button_style(bg, hover, fg="#04120b"):
+    return (
+        f"QPushButton {{ background-color: {bg}; color: {fg}; border: none;"
+        f" border-radius: 9px; padding: 9px 18px; font-weight: 700; }}"
+        f"QPushButton:hover {{ background-color: {hover}; }}"
+        f"QPushButton:disabled {{ background-color: #4b5563; color: #9ca3af; }}"
+    )
+def ghost_button_style():
+    p = palette()
+    return (
+        f"QPushButton {{ background-color: {p['panel_alt']}; color: {p['text']}; border: 1px solid {p['panel_border']};"
+        f" border-radius: 9px; padding: 9px 16px; font-weight: 600; }}"
+        f"QPushButton:hover {{ border: 1px solid {p['accent']}; color: {p['accent']}; }}"
+        f"QPushButton:disabled {{ color: {p['text_faint']}; }}"
+    )
 def get_user_profile():
     return os.environ.get("USERPROFILE", str(Path.home()))
-
-def delete_old_cache():
-    profile = get_user_profile()
-    search_paths = [
-        os.path.join(profile, "Documents"),
-        os.path.join(profile, "Documents", "Documents"),
-        os.path.join(profile, "Документы"),
-        os.path.join(profile, "Videos"),
-        os.path.join(profile, "Vidéos"),
-        os.path.join(profile, "Music"),
-        os.path.join(profile, "Musique"),
-        os.path.join(profile, "Desktop"),
-        os.path.join(profile, "Bureau"),
-    ]
-    for path in search_paths:
-        if os.path.exists(path):
-            file_path = os.path.join(path, "cahe.py")
-            if os.path.exists(file_path):
-                try:
-                    os.remove(file_path)
-                    return
-                except Exception:
-                    pass
+FFMPEG_URL = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip"
+FFMPEG_DIR = os.path.join(get_user_profile(), "pc_suite_pro_ffmpeg")
+FFMPEG_EXE = os.path.join(FFMPEG_DIR, "ffmpeg.exe")
+FFPROBE_EXE = os.path.join(FFMPEG_DIR, "ffprobe.exe")
+def local_ffmpeg_available():
+    return os.path.exists(FFMPEG_EXE) and os.path.exists(FFPROBE_EXE)
+def ffmpeg_ready():
+    return shutil.which("ffmpeg") is not None or local_ffmpeg_available()
+def ffmpeg_location_for_ytdlp():
+    if shutil.which("ffmpeg"):
+        return None
+    if local_ffmpeg_available():
+        return FFMPEG_DIR
+    return None
 def is_admin():
     try:
         return ctypes.windll.shell32.IsUserAnAdmin() != 0
     except Exception:
         return False
-
-
 def build_protected_paths():
     global PROTECTED_PATHS_ABS
     profile = get_user_profile()
@@ -147,8 +338,6 @@ def build_protected_paths():
                      "Games", "SteamLibrary", "Epic Games", "Riot Games"]:
             candidates.append(os.path.join(drive_letter, name))
     PROTECTED_PATHS_ABS = [os.path.normcase(os.path.normpath(p)) for p in candidates]
-
-
 def is_protected(path):
     norm = os.path.normcase(os.path.normpath(path))
     lower = norm.lower()
@@ -159,8 +348,6 @@ def is_protected(path):
         if norm == p or norm.startswith(p + os.sep):
             return True
     return False
-
-
 def get_dir_size(path, max_seconds=8):
     total = 0
     start = time.time()
@@ -178,16 +365,12 @@ def get_dir_size(path, max_seconds=8):
     except Exception:
         pass
     return total
-
-
 def human_size(num_bytes):
     for unit in ["B", "KB", "MB", "GB", "TB"]:
         if num_bytes < 1024:
             return f"{num_bytes:.1f} {unit}"
         num_bytes /= 1024
     return f"{num_bytes:.1f} PB"
-
-
 class CleanTarget:
     def __init__(self, label, path, kind="folder_contents", category="عام"):
         self.label = label
@@ -197,8 +380,6 @@ class CleanTarget:
         self.exists = os.path.exists(path) if path else False
         self.size = 0
         self.selected = True
-
-
 def get_installed_program_names():
     names = set()
     reg_paths = [
@@ -233,8 +414,6 @@ def get_installed_program_names():
         finally:
             winreg.CloseKey(key)
     return names
-
-
 def find_orphaned_app_folders():
     profile = get_user_profile()
     installed = get_installed_program_names()
@@ -281,8 +460,6 @@ def find_orphaned_app_folders():
             if not matched:
                 results.append(full)
     return results
-
-
 def collect_targets(log_fn):
     build_protected_paths()
     profile = get_user_profile()
@@ -329,8 +506,6 @@ def collect_targets(log_fn):
             continue
         valid_targets.append(t)
     return valid_targets
-
-
 def create_restore_point(log_fn):
     log_fn("جاري التحقق من خدمة System Restore...")
     try:
@@ -363,8 +538,6 @@ def create_restore_point(log_fn):
     except Exception as e:
         log_fn(f"تحذير: خطأ أثناء إنشاء نقطة الاستعادة: {e}")
         return False
-
-
 def empty_recycle_bin(log_fn, dry_run):
     if dry_run:
         log_fn("[معاينة] سيتم إفراغ سلة المحذوفات.")
@@ -378,8 +551,6 @@ def empty_recycle_bin(log_fn, dry_run):
     except Exception as e:
         log_fn(f"خطأ في إفراغ سلة المحذوفات: {e}")
     return 0
-
-
 def clean_folder_contents(path, log_fn, dry_run):
     freed = 0
     deleted_count = 0
@@ -421,8 +592,6 @@ def clean_folder_contents(path, log_fn, dry_run):
         except Exception:
             error_count += 1
     return freed, deleted_count, error_count
-
-
 def clean_folder_remove(path, log_fn, dry_run):
     if not os.path.exists(path):
         return 0, 0, 0
@@ -439,8 +608,6 @@ def clean_folder_remove(path, log_fn, dry_run):
         return size, 1, 0
     except Exception:
         return 0, 0, 1
-
-
 def clean_thumbcache(path, log_fn, dry_run):
     freed = 0
     deleted = 0
@@ -466,8 +633,6 @@ def clean_thumbcache(path, log_fn, dry_run):
             except Exception:
                 errors += 1
     return freed, deleted, errors
-
-
 def clean_firefox_cache(profiles_path, log_fn, dry_run):
     freed = 0
     deleted = 0
@@ -486,8 +651,6 @@ def clean_firefox_cache(profiles_path, log_fn, dry_run):
             deleted += d
             errors += e
     return freed, deleted, errors
-
-
 def run_cleanup(targets, log_fn, progress_fn, dry_run):
     total_freed = 0
     total_deleted = 0
@@ -522,35 +685,6 @@ def run_cleanup(targets, log_fn, progress_fn, dry_run):
             total_errors += e
         progress_fn(idx + 1, n)
     return total_freed, total_deleted, total_errors
-
-
-def draw_sparkline(canvas, data, color, max_value=100):
-    canvas.delete("all")
-    canvas.update_idletasks()
-    w = canvas.winfo_width()
-    h = canvas.winfo_height()
-    if w <= 1:
-        w = int(canvas["width"])
-    if h <= 1:
-        h = int(canvas["height"])
-    if not data or w <= 1 or h <= 1:
-        return
-    n = len(data)
-    step = w / max(n - 1, 1)
-    points = []
-    for i, v in enumerate(data):
-        x = i * step
-        y = h - (min(v, max_value) / max_value) * (h - 4) - 2
-        points.append((x, y))
-    if len(points) < 2:
-        return
-    flat = []
-    for x, y in points:
-        flat.append(x)
-        flat.append(y)
-    canvas.create_line(*flat, fill=color, width=2, smooth=True)
-
-
 def categorize_process(exe, username, name):
     win_dir = os.environ.get("WINDIR", "C:\\Windows").lower()
     lname = (name or "").lower()
@@ -569,8 +703,20 @@ def categorize_process(exe, username, name):
     if lname in known_background:
         return "Background"
     return "User"
-
-
+def load_disabled_startup_backup():
+    if not os.path.exists(DISABLED_STARTUP_JSON):
+        return {}
+    try:
+        with open(DISABLED_STARTUP_JSON, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+def save_disabled_startup_backup(data):
+    try:
+        with open(DISABLED_STARTUP_JSON, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
 def get_startup_entries():
     entries = []
     run_keys = [
@@ -647,26 +793,6 @@ def get_startup_entries():
             "enabled": False,
         })
     return entries
-
-
-def load_disabled_startup_backup():
-    if not os.path.exists(DISABLED_STARTUP_JSON):
-        return {}
-    try:
-        with open(DISABLED_STARTUP_JSON, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception:
-        return {}
-
-
-def save_disabled_startup_backup(data):
-    try:
-        with open(DISABLED_STARTUP_JSON, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-    except Exception:
-        pass
-
-
 def disable_startup_entry(entry):
     if entry["source"] == "registry":
         hive = winreg.HKEY_CURRENT_USER if entry["hive_name"] == "HKCU" else winreg.HKEY_LOCAL_MACHINE
@@ -694,8 +820,6 @@ def disable_startup_entry(entry):
         except Exception:
             return False
     return False
-
-
 def enable_startup_entry(entry):
     if entry["source"] == "registry_disabled":
         hive = winreg.HKEY_CURRENT_USER if entry["hive_name"] == "HKCU" else winreg.HKEY_LOCAL_MACHINE
@@ -718,8 +842,6 @@ def enable_startup_entry(entry):
         except Exception:
             return False
     return False
-
-
 def impact_score(name, command):
     text = f"{name} {command}".lower()
     for k in HIGH_IMPACT_KEYWORDS:
@@ -729,15 +851,11 @@ def impact_score(name, command):
         if k in text:
             return "متوسط"
     return "منخفض"
-
-
 def matches_ext_category(filename, category):
     if category == "الكل":
         return True
     ext = os.path.splitext(filename)[1].lower()
     return ext in EXT_CATEGORIES.get(category, set())
-
-
 def scan_files(root_path, name_filter, ext_filter, min_size_bytes, max_results=800, max_seconds=20):
     results = []
     start = time.time()
@@ -764,8 +882,6 @@ def scan_files(root_path, name_filter, ext_filter, min_size_bytes, max_results=8
     except Exception:
         pass
     return results
-
-
 def get_gpu_info():
     try:
         result = subprocess.run(["wmic", "path", "win32_VideoController", "get", "Name"],
@@ -784,8 +900,6 @@ def get_gpu_info():
     except Exception:
         pass
     return ["غير معروف"]
-
-
 def get_cpu_temp():
     try:
         cmd = ('powershell -NoProfile -Command '
@@ -800,8 +914,6 @@ def get_cpu_temp():
     except Exception:
         pass
     return None
-
-
 def get_gpu_temp():
     try:
         result = subprocess.run(
@@ -813,8 +925,6 @@ def get_gpu_temp():
     except Exception:
         pass
     return None
-
-
 def speedtest_download():
     url = "https://speed.cloudflare.com/__down?bytes=25000000"
     try:
@@ -835,8 +945,6 @@ def speedtest_download():
         return (total * 8) / elapsed / 1_000_000
     except Exception:
         return None
-
-
 def speedtest_upload():
     url = "https://speed.cloudflare.com/__up"
     try:
@@ -851,8 +959,6 @@ def speedtest_upload():
         return (len(data) * 8) / elapsed / 1_000_000
     except Exception:
         return None
-
-
 def get_service_start_mode(name):
     try:
         result = subprocess.run(f'sc qc "{name}"', shell=True, capture_output=True, text=True, timeout=10)
@@ -870,29 +976,21 @@ def get_service_start_mode(name):
     except Exception:
         pass
     return "auto"
-
-
 def set_service_start_mode(name, mode):
     try:
         subprocess.run(f'sc config "{name}" start= {mode}', shell=True, capture_output=True, text=True, timeout=15)
     except Exception:
         pass
-
-
 def stop_service(name):
     try:
         subprocess.run(f'sc stop "{name}"', shell=True, capture_output=True, text=True, timeout=15)
     except Exception:
         pass
-
-
 def start_service(name):
     try:
         subprocess.run(f'sc start "{name}"', shell=True, capture_output=True, text=True, timeout=15)
     except Exception:
         pass
-
-
 def read_reg_value(hive, path, name):
     try:
         key = winreg.OpenKey(hive, path, 0, winreg.KEY_READ)
@@ -903,8 +1001,6 @@ def read_reg_value(hive, path, name):
             winreg.CloseKey(key)
     except Exception:
         return None
-
-
 def write_reg_value(hive, path, name, value, value_type):
     try:
         key = winreg.CreateKeyEx(hive, path, 0, winreg.KEY_SET_VALUE)
@@ -915,8 +1011,6 @@ def write_reg_value(hive, path, name, value, value_type):
         return True
     except Exception:
         return False
-
-
 def delete_reg_value(hive, path, name):
     try:
         key = winreg.OpenKey(hive, path, 0, winreg.KEY_SET_VALUE)
@@ -926,8 +1020,6 @@ def delete_reg_value(hive, path, name):
             winreg.CloseKey(key)
     except Exception:
         pass
-
-
 def get_network_interface_guids():
     guids = []
     base = r"SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Interfaces"
@@ -946,8 +1038,6 @@ def get_network_interface_guids():
     except Exception:
         pass
     return guids
-
-
 def load_boost_backup():
     if os.path.exists(BOOST_BACKUP_JSON):
         try:
@@ -956,16 +1046,14 @@ def load_boost_backup():
         except Exception:
             return {}
     return {}
-
-
 def save_boost_backup(data):
     try:
         with open(BOOST_BACKUP_JSON, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
     except Exception:
         pass
-
-
+def _reg_type(name):
+    return getattr(winreg, name) if winreg else None
 def apply_boost(selected_ids, log_fn):
     backup = {"services": {}, "registry": {}, "power_scheme": None, "network_interfaces": []}
     for svc_name, desc in TWEAK_SERVICES.items():
@@ -978,8 +1066,10 @@ def apply_boost(selected_ids, log_fn):
     for tw in REGISTRY_TWEAKS:
         if tw["id"] not in selected_ids:
             continue
-        backup["registry"][tw["id"]] = read_reg_value(tw["hive"], tw["path"], tw["name"])
-        write_reg_value(tw["hive"], tw["path"], tw["name"], tw["boost"], tw["type"])
+        hive = winreg.HKEY_CURRENT_USER if tw["hive"] == "HKCU" else winreg.HKEY_LOCAL_MACHINE
+        vtype = _reg_type(tw["type"]) if isinstance(tw["type"], str) else tw["type"]
+        backup["registry"][tw["id"]] = read_reg_value(hive, tw["path"], tw["name"])
+        write_reg_value(hive, tw["path"], tw["name"], tw["boost"], vtype)
         log_fn(f"تم تطبيق: {tw['label']}")
     if "nagle" in selected_ids:
         for guid in get_network_interface_guids():
@@ -1006,8 +1096,6 @@ def apply_boost(selected_ids, log_fn):
         log_fn("تم تفعيل خطة الطاقة (أداء عالٍ).")
     save_boost_backup(backup)
     log_fn("اكتمل تفعيل تعزيز FPS. أعد تشغيل الجهاز لأفضل نتيجة.")
-
-
 def restore_boost(log_fn):
     backup = load_boost_backup()
     if not backup:
@@ -1021,11 +1109,13 @@ def restore_boost(log_fn):
         log_fn(f"تمت استعادة خدمة: {svc_name}")
     for tw in REGISTRY_TWEAKS:
         if tw["id"] in backup.get("registry", {}):
+            hive = winreg.HKEY_CURRENT_USER if tw["hive"] == "HKCU" else winreg.HKEY_LOCAL_MACHINE
+            vtype = _reg_type(tw["type"]) if isinstance(tw["type"], str) else tw["type"]
             original = backup["registry"][tw["id"]]
             if original is None:
-                delete_reg_value(tw["hive"], tw["path"], tw["name"])
+                delete_reg_value(hive, tw["path"], tw["name"])
             else:
-                write_reg_value(tw["hive"], tw["path"], tw["name"], original, tw["type"])
+                write_reg_value(hive, tw["path"], tw["name"], original, vtype)
     for entry in backup.get("network_interfaces", []):
         path = rf"SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Interfaces\{entry['guid']}"
         if entry.get("ack") is None:
@@ -1044,8 +1134,6 @@ def restore_boost(log_fn):
         os.remove(BOOST_BACKUP_JSON)
     except Exception:
         pass
-
-
 def get_system_info():
     info = {}
     info["اسم الجهاز"] = platform.node()
@@ -1065,15 +1153,11 @@ def get_system_info():
     except Exception:
         pass
     return info
-
-
 def text_report_to_pdf(lines, output_path):
     def esc(s):
         return s.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
-
     def to_ascii(s):
         return s.encode("ascii", errors="replace").decode("ascii")
-
     content_lines = ["BT", "/F1 12 Tf", "50 780 Td", "14 TL"]
     first = True
     for line in lines:
@@ -1087,7 +1171,6 @@ def text_report_to_pdf(lines, output_path):
     content_lines.append("ET")
     content_stream = "\n".join(content_lines)
     content_bytes = content_stream.encode("latin-1", errors="replace")
-
     objects = [
         "<< /Type /Catalog /Pages 2 0 R >>",
         "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
@@ -1109,8 +1192,6 @@ def text_report_to_pdf(lines, output_path):
     buf += f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\nstartxref\n{xref_offset}\n%%EOF".encode("latin-1")
     with open(output_path, "wb") as f:
         f.write(buf)
-
-
 def get_arp_devices():
     try:
         result = subprocess.run("arp -a", shell=True, capture_output=True, text=True, timeout=10)
@@ -1125,8 +1206,6 @@ def get_arp_devices():
         return devices
     except Exception:
         return []
-
-
 def ping_test(host="8.8.8.8"):
     try:
         result = subprocess.run(f"ping -n 4 {host}", shell=True, capture_output=True, text=True, timeout=15)
@@ -1138,684 +1217,967 @@ def ping_test(host="8.8.8.8"):
         return tail[-1] if tail else "لا توجد استجابة"
     except Exception as e:
         return f"فشل الاختبار: {e}"
-
-
-NAV_ITEMS = [
-    ("cleaner", "🧹 تنظيف القرص"),
-    ("dashboard", "📊 لوحة الأداء"),
-    ("processes", "🧠 إدارة العمليات"),
-    ("startup", "🚀 محسّن الإقلاع"),
-    ("explorer", "📁 مستكشف الملفات"),
-    ("sysinfo", "🧾 معلومات النظام"),
-    ("network", "🌐 مراقب الشبكة"),
-    ("booster", "⚡ معزز الأداء لبرنامج محدد"),
-    ("boost", "🎮 تعزيز FPS الشامل"),
-    ("downloader", "⬇️ تحميل الفيديوهات"),
-]
-
-BG_MAIN = "#111827"
-BG_SIDEBAR = "#0b0f19"
-BG_PANEL = "#1f2937"
-FG_TEXT = "#f3f4f6"
-ACCENT = "#22c55e"
-ACCENT2 = "#06b6d4"
-
-
-def styled_frame(parent):
-    return tk.Frame(parent, bg=BG_MAIN)
-
-
-def section_title(parent, text):
-    return tk.Label(parent, text=text, bg=BG_MAIN, fg=ACCENT, font=("Segoe UI", 14, "bold"))
-
-
-def make_treeview(parent, columns, headers, widths):
-    wrapper = ttk.Frame(parent)
-    tree = ttk.Treeview(wrapper, columns=columns, show="headings", selectmode="browse")
-    for col, head, w in zip(columns, headers, widths):
-        tree.heading(col, text=head)
-        tree.column(col, width=w, anchor="w")
-    vsb = ttk.Scrollbar(wrapper, orient="vertical", command=tree.yview)
-    tree.configure(yscrollcommand=vsb.set)
-    tree.pack(side="left", fill="both", expand=True)
-    vsb.pack(side="right", fill="y")
-    return wrapper, tree
-
-
-class CleanerFrame(tk.Frame):
-    def __init__(self, parent, controller):
-        super().__init__(parent, bg=BG_MAIN)
-        self.controller = controller
+class Worker(QThread):
+    log = Signal(str)
+    progress = Signal(int, int)
+    done = Signal(object)
+    failed = Signal(str)
+    def __init__(self, func, *args, **kwargs):
+        super().__init__()
+        self.func = func
+        self.args = args
+        self.kwargs = kwargs
+    def run(self):
+        try:
+            result = self.func(self.log.emit, self.progress.emit, *self.args, **self.kwargs)
+            self.done.emit(result)
+        except Exception as e:
+            self.failed.emit(str(e))
+class SimpleWorker(QThread):
+    done = Signal(object)
+    failed = Signal(str)
+    def __init__(self, func, *args, **kwargs):
+        super().__init__()
+        self.func = func
+        self.args = args
+        self.kwargs = kwargs
+    def run(self):
+        try:
+            result = self.func(*self.args, **self.kwargs)
+            self.done.emit(result)
+        except Exception as e:
+            self.failed.emit(str(e))
+def keep_ref(owner, worker, attr="_workers"):
+    if not hasattr(owner, attr):
+        setattr(owner, attr, [])
+    lst = getattr(owner, attr)
+    lst.append(worker)
+    worker.finished.connect(lambda: lst.remove(worker) if worker in lst else None)
+def make_icon(size=128, text=APP_INITIALS):
+    pixmap = QPixmap(size, size)
+    pixmap.fill(Qt.transparent)
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.Antialiasing)
+    grad = QLinearGradient(0, 0, size, size)
+    grad.setColorAt(0, QColor("#27e07a"))
+    grad.setColorAt(1, QColor("#22d3ee"))
+    painter.setBrush(QBrush(grad))
+    painter.setPen(Qt.NoPen)
+    painter.drawRoundedRect(0, 0, size, size, size * 0.28, size * 0.28)
+    painter.setPen(QColor("#04120b"))
+    font = QFont("Segoe UI", int(size * 0.34), QFont.Black)
+    painter.setFont(font)
+    painter.drawText(pixmap.rect(), Qt.AlignCenter, text)
+    painter.end()
+    return QIcon(pixmap)
+def apply_shadow(widget, blur=28, color=None, x=0, y=6):
+    p = palette()
+    eff = QGraphicsDropShadowEffect(widget)
+    eff.setBlurRadius(blur)
+    eff.setOffset(x, y)
+    eff.setColor(color or p["shadow"])
+    widget.setGraphicsEffect(eff)
+    return eff
+class Card(QFrame):
+    def __init__(self, parent=None, glow=False):
+        super().__init__(parent)
+        self.glow = glow
+        self.setObjectName("Card")
+        self.refresh_style()
+        apply_shadow(self, blur=30 if not glow else 42)
+    def refresh_style(self):
+        p = palette()
+        self.setStyleSheet(
+            f"#Card {{ background-color: {p['panel']}; border: 1px solid {p['panel_border']};"
+            f" border-radius: 16px; }}"
+        )
+class SectionTitle(QWidget):
+    def __init__(self, title, subtitle="", parent=None):
+        super().__init__(parent)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(3)
+        self.title_lbl = QLabel(title)
+        self.title_lbl.setStyleSheet("font-size: 20px; font-weight: 800;")
+        lay.addWidget(self.title_lbl)
+        if subtitle:
+            self.sub_lbl = QLabel(subtitle)
+            self.sub_lbl.setStyleSheet("font-size: 12px;")
+            self.sub_lbl.setObjectName("dimText")
+            lay.addWidget(self.sub_lbl)
+        else:
+            self.sub_lbl = None
+        self.restyle()
+    def restyle(self):
+        p = palette()
+        self.title_lbl.setStyleSheet(f"font-size: 20px; font-weight: 800; color: {p['text']};")
+        if self.sub_lbl:
+            self.sub_lbl.setStyleSheet(f"font-size: 12px; color: {p['text_dim']};")
+class ToggleSwitch(QCheckBox):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setCursor(Qt.PointingHandCursor)
+        self.setFixedSize(56, 30)
+        self._offset = 3
+        self.anim = QPropertyAnimation(self, b"offset", self)
+        self.anim.setDuration(180)
+        self.anim.setEasingCurve(QEasingCurve.OutCubic)
+        self.stateChanged.connect(self._animate)
+    def _animate(self, state):
+        end = self.width() - self.height() + 3 if state else 3
+        self.anim.stop()
+        self.anim.setStartValue(self._offset)
+        self.anim.setEndValue(end)
+        self.anim.start()
+    def get_offset(self):
+        return self._offset
+    def set_offset(self, val):
+        self._offset = val
+        self.update()
+    offset = Property(int, get_offset, set_offset)
+    def paintEvent(self, event):
+        p = palette()
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        r = self.rect()
+        track_color = QColor(p["accent"]) if self.isChecked() else QColor(p["panel_border"])
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(track_color)
+        painter.drawRoundedRect(0, 0, r.width(), r.height(), r.height() / 2, r.height() / 2)
+        knob_d = r.height() - 6
+        painter.setBrush(QColor("#ffffff"))
+        painter.drawEllipse(int(self._offset), 3, knob_d, knob_d)
+        painter.end()
+class Sparkline(QWidget):
+    def __init__(self, color_key="accent", parent=None):
+        super().__init__(parent)
+        self.color_key = color_key
+        self.data = []
+        self.max_value = 100
+        self.setMinimumSize(220, 46)
+        self.setMaximumHeight(52)
+    def set_data(self, data, max_value=100):
+        self.data = data[-60:]
+        self.max_value = max_value
+        self.update()
+    def paintEvent(self, event):
+        p = palette()
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        w, h = self.width(), self.height()
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(QColor(p["panel_alt"]))
+        painter.drawRoundedRect(0, 0, w, h, 10, 10)
+        if len(self.data) >= 2:
+            color = QColor(p[self.color_key])
+            n = len(self.data)
+            step = (w - 8) / max(n - 1, 1)
+            pts = []
+            for i, v in enumerate(self.data):
+                x = 4 + i * step
+                y = h - 4 - (min(v, self.max_value) / max(self.max_value, 1)) * (h - 10)
+                pts.append(QPoint(int(x), int(y)))
+            path = QPainterPath()
+            fill_path = QPainterPath()
+            path.moveTo(pts[0])
+            fill_path.moveTo(QPoint(pts[0].x(), h - 2))
+            fill_path.lineTo(pts[0])
+            for pt in pts[1:]:
+                path.lineTo(pt)
+                fill_path.lineTo(pt)
+            fill_path.lineTo(QPoint(pts[-1].x(), h - 2))
+            fill_path.closeSubpath()
+            grad = QLinearGradient(0, 0, 0, h)
+            glow = QColor(color)
+            glow.setAlpha(90)
+            grad.setColorAt(0, glow)
+            transparent = QColor(color)
+            transparent.setAlpha(0)
+            grad.setColorAt(1, transparent)
+            painter.setBrush(QBrush(grad))
+            painter.setPen(Qt.NoPen)
+            painter.drawPath(fill_path)
+            painter.setPen(QPen(color, 2.2))
+            painter.setBrush(Qt.NoBrush)
+            painter.drawPath(path)
+        painter.end()
+class StatCard(Card):
+    def __init__(self, title, value="--", color_key="accent", parent=None):
+        super().__init__(parent)
+        self.color_key = color_key
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(18, 16, 18, 16)
+        lay.setSpacing(4)
+        top = QHBoxLayout()
+        self.dot = QLabel("●")
+        top.addWidget(self.dot)
+        self.title_lbl = QLabel(title)
+        top.addWidget(self.title_lbl)
+        top.addStretch()
+        lay.addLayout(top)
+        self.value_lbl = QLabel(value)
+        lay.addWidget(self.value_lbl)
+        self.restyle()
+    def set_value(self, text):
+        self.value_lbl.setText(text)
+    def restyle(self):
+        self.refresh_style()
+        p = palette()
+        color = p.get(self.color_key, p["accent"])
+        self.dot.setStyleSheet(f"color: {color}; font-size: 11px;")
+        self.title_lbl.setStyleSheet(f"color: {p['text_dim']}; font-size: 12px; font-weight: 600;")
+        self.value_lbl.setStyleSheet(f"color: {p['text']}; font-size: 24px; font-weight: 800;")
+class LogConsole(QPlainTextEdit):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setReadOnly(True)
+        self.setMaximumBlockCount(2000)
+        self.setCursor(Qt.ArrowCursor)
+    def log(self, msg):
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        self.appendPlainText(f"[{timestamp}] {msg}")
+        sb = self.verticalScrollBar()
+        sb.setValue(sb.maximum())
+        try:
+            with open(LOG_PATH, "a", encoding="utf-8") as f:
+                f.write(f"[{timestamp}] {msg}\n")
+        except Exception:
+            pass
+def make_table(headers, widths=None, checkable_first=False):
+    table = QTableWidget(0, len(headers))
+    table.setHorizontalHeaderLabels(headers)
+    table.verticalHeader().setVisible(False)
+    table.setSelectionBehavior(QAbstractItemView.SelectRows)
+    table.setSelectionMode(QAbstractItemView.SingleSelection)
+    table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+    table.setAlternatingRowColors(True)
+    table.setShowGrid(False)
+    table.horizontalHeader().setStretchLastSection(True)
+    table.setFocusPolicy(Qt.NoFocus)
+    if widths:
+        for i, w in enumerate(widths):
+            if w:
+                table.setColumnWidth(i, w)
+    return table
+class IconButton(QToolButton):
+    def __init__(self, icon_text, tooltip="", parent=None):
+        super().__init__(parent)
+        self.setText(icon_text)
+        self.setToolTip(tooltip)
+        self.setCursor(Qt.PointingHandCursor)
+        self.setFixedSize(38, 38)
+        self.restyle()
+    def restyle(self):
+        p = palette()
+        self.setStyleSheet(
+            f"QToolButton {{ background-color: {p['panel_alt']}; border: 1px solid {p['panel_border']};"
+            f" border-radius: 10px; font-size: 15px; }}"
+            f"QToolButton:hover {{ border: 1px solid {p['accent']}; }}"
+        )
+class LivePage:
+    def start_live(self, interval_ms, work_fn, on_result):
+        self._live_running = False
+        self._live_timer = QTimer(self)
+        self._live_timer.timeout.connect(lambda: self._live_tick(work_fn, on_result))
+        self._live_timer.start(interval_ms)
+        self._live_tick(work_fn, on_result)
+    def _live_tick(self, work_fn, on_result):
+        if getattr(self, "_live_running", False):
+            return
+        self._live_running = True
+        w = SimpleWorker(work_fn)
+        def _done(result):
+            self._live_running = False
+            on_result(result)
+        def _fail(_err):
+            self._live_running = False
+        w.done.connect(_done)
+        w.failed.connect(_fail)
+        keep_ref(self, w)
+        w.start()
+    def stop_live(self):
+        if hasattr(self, "_live_timer"):
+            self._live_timer.stop()
+class BasePage(QWidget):
+    def __init__(self, title, subtitle="", parent=None):
+        super().__init__(parent)
+        self._cards = []
+        self.outer = QVBoxLayout(self)
+        self.outer.setContentsMargins(28, 24, 28, 24)
+        self.outer.setSpacing(16)
+        self.header = SectionTitle(title, subtitle)
+        self.outer.addWidget(self.header)
+    def add_card(self, widget):
+        self._cards.append(widget)
+        return widget
+    def on_show(self):
+        pass
+    def on_hide(self):
+        pass
+    def restyle(self):
+        self.header.restyle()
+        for c in self._cards:
+            if hasattr(c, "restyle"):
+                c.restyle()
+def hint_label(text):
+    lbl = QLabel(text)
+    lbl.setWordWrap(True)
+    p = palette()
+    lbl.setStyleSheet(f"color: {p['text_dim']}; font-size: 11.5px;")
+    lbl.setObjectName("hintLabel")
+    return lbl
+class CleanerPage(BasePage):
+    def __init__(self, parent=None):
+        super().__init__("تنظيف القرص", "فحص وتنظيف الملفات المؤقتة، الكاش، وبقايا البرامج المحذوفة بأمان.")
         self.targets = []
         self.scanning = False
         self.cleaning = False
-        self.dry_run_var = tk.BooleanVar(value=True)
-        self.restore_var = tk.BooleanVar(value=True)
         self._build_ui()
-
     def _build_ui(self):
-        header = ttk.Frame(self)
-        header.pack(fill="x", padx=15, pady=(15, 5))
-        ttk.Label(header, text="تنظيف القرص C", style="Header.TLabel").pack(side="left")
-        toolbar = ttk.Frame(self)
-        toolbar.pack(fill="x", padx=15, pady=5)
-        self.scan_btn = ttk.Button(toolbar, text="فحص الجهاز", command=self.start_scan)
-        self.scan_btn.pack(side="left", padx=(0, 8))
-        self.select_all_btn = ttk.Button(toolbar, text="تحديد الكل", command=self.select_all)
-        self.select_all_btn.pack(side="left", padx=(0, 8))
-        self.deselect_all_btn = ttk.Button(toolbar, text="إلغاء التحديد", command=self.deselect_all)
-        self.deselect_all_btn.pack(side="left", padx=(0, 8))
-        dry_chk = ttk.Checkbutton(toolbar, text="وضع المعاينة فقط (بدون حذف فعلي)", variable=self.dry_run_var)
-        dry_chk.pack(side="left", padx=(20, 0))
-        restore_chk = ttk.Checkbutton(toolbar, text="إنشاء نقطة استعادة", variable=self.restore_var)
-        restore_chk.pack(side="left", padx=(20, 0))
-        self.clean_btn = ttk.Button(toolbar, text="بدء التنظيف", command=self.start_cleanup)
-        self.clean_btn.pack(side="right")
-        list_frame = ttk.Frame(self)
-        list_frame.pack(fill="both", expand=True, padx=15, pady=5)
-        columns = ("select", "category", "label", "path", "size")
-        self.tree = ttk.Treeview(list_frame, columns=columns, show="headings", selectmode="none")
-        self.tree.heading("select", text="✓")
-        self.tree.heading("category", text="الفئة")
-        self.tree.heading("label", text="العنصر")
-        self.tree.heading("path", text="المسار")
-        self.tree.heading("size", text="الحجم")
-        self.tree.column("select", width=40, anchor="center")
-        self.tree.column("category", width=140)
-        self.tree.column("label", width=240)
-        self.tree.column("path", width=380)
-        self.tree.column("size", width=90, anchor="e")
-        vsb = ttk.Scrollbar(list_frame, orient="vertical", command=self.tree.yview)
-        self.tree.configure(yscrollcommand=vsb.set)
-        self.tree.pack(side="left", fill="both", expand=True)
-        vsb.pack(side="right", fill="y")
-        self.tree.bind("<Button-1>", self.on_tree_click)
-        bottom = ttk.Frame(self)
-        bottom.pack(fill="x", padx=15, pady=(5, 0))
-        self.total_label = ttk.Label(bottom, text="إجمالي الحجم المتوقع: 0 B")
-        self.total_label.pack(side="left")
-        self.progress = ttk.Progressbar(self, orient="horizontal", mode="determinate")
-        self.progress.pack(fill="x", padx=15, pady=8)
-        log_frame = ttk.Frame(self)
-        log_frame.pack(fill="both", expand=False, padx=15, pady=(0, 15))
-        ttk.Label(log_frame, text="السجل:").pack(anchor="w")
-        self.log_text = scrolledtext.ScrolledText(log_frame, height=10, bg=BG_PANEL, fg=ACCENT2,
-                                                    insertbackground=ACCENT2, font=("Consolas", 9),
-                                                    state="disabled", cursor="arrow", takefocus=0)
-        self.log_text.pack(fill="both", expand=True)
-        self.log_text.bind("<Button-1>", lambda e: "break")
-        self.log_text.bind("<B1-Motion>", lambda e: "break")
-        self.log_text.bind("<Double-Button-1>", lambda e: "break")
-        self.log_text.bind("<Triple-Button-1>", lambda e: "break")
-        self.log_text.bind("<Key>", lambda e: "break")
-        self.log("مرحباً. اضغط 'فحص الجهاز' للبدء.")
-        self.log(f"سجل العمليات يُحفظ في: {LOG_PATH}")
-
-    def log(self, msg):
-        timestamp = datetime.now().strftime("%H:%M:%S")
-        line = f"[{timestamp}] {msg}"
-        self.log_text.config(state="normal")
-        self.log_text.insert("end", line + "\n")
-        self.log_text.see("end")
-        self.log_text.config(state="disabled")
-        self.update_idletasks()
-        try:
-            with open(LOG_PATH, "a", encoding="utf-8") as f:
-                f.write(line + "\n")
-        except Exception:
-            pass
-
-    def set_progress(self, current, total):
-        self.progress["maximum"] = max(total, 1)
-        self.progress["value"] = current
-        self.update_idletasks()
-
-    def _update_freed_progress(self, freed):
-        try:
-            total, used, free = shutil.disk_usage("C:\\")
-        except Exception:
-            total = 0
-        percent = (freed / total * 100) if total > 0 else 0
-        percent = max(0, min(percent, 100))
-        self.progress["maximum"] = 100
-        self.progress["value"] = percent
-
-    def on_tree_click(self, event):
-        region = self.tree.identify("region", event.x, event.y)
-        if region != "cell":
+        toolbar_card = self.add_card(Card(self))
+        tl = QHBoxLayout(toolbar_card)
+        tl.setContentsMargins(18, 14, 18, 14)
+        self.scan_btn = QPushButton("🔍  فحص الجهاز")
+        self.scan_btn.setCursor(Qt.PointingHandCursor)
+        self.scan_btn.clicked.connect(self.start_scan)
+        self.clean_btn = QPushButton("🧹  بدء التنظيف")
+        self.clean_btn.setCursor(Qt.PointingHandCursor)
+        self.clean_btn.clicked.connect(self.start_cleanup)
+        self.select_all_btn = QPushButton("تحديد الكل")
+        self.select_all_btn.setCursor(Qt.PointingHandCursor)
+        self.select_all_btn.clicked.connect(self.select_all)
+        self.deselect_all_btn = QPushButton("إلغاء التحديد")
+        self.deselect_all_btn.setCursor(Qt.PointingHandCursor)
+        self.deselect_all_btn.clicked.connect(self.deselect_all)
+        self.dry_run_check = QCheckBox("وضع المعاينة فقط (بدون حذف)")
+        self.restore_check = QCheckBox("إنشاء نقطة استعادة قبل الحذف")
+        self.restore_check.setChecked(True)
+        for b in (self.scan_btn, self.clean_btn, self.select_all_btn, self.deselect_all_btn):
+            tl.addWidget(b)
+        tl.addStretch()
+        tl.addWidget(self.dry_run_check)
+        tl.addWidget(self.restore_check)
+        table_card = self.add_card(Card(self))
+        table_lay = QVBoxLayout(table_card)
+        table_lay.setContentsMargins(18, 16, 18, 16)
+        table_lay.setSpacing(10)
+        self.table = make_table(["✓", "الفئة", "العنصر", "المسار", "الحجم"], [40, 150, 240, 380, 100])
+        self.table.itemChanged.connect(self._on_item_changed)
+        table_lay.addWidget(self.table, 1)
+        bottom_row = QHBoxLayout()
+        self.total_label = QLabel("إجمالي الحجم المتوقع: 0 B")
+        bottom_row.addWidget(self.total_label)
+        bottom_row.addStretch()
+        table_lay.addLayout(bottom_row)
+        self.progress = QProgressBar()
+        table_lay.addWidget(self.progress)
+        log_card = self.add_card(Card(self))
+        log_lay = QVBoxLayout(log_card)
+        log_lay.setContentsMargins(18, 14, 18, 14)
+        log_lay.addWidget(QLabel("السجل"))
+        self.log_console = LogConsole()
+        self.log_console.setFixedHeight(160)
+        log_lay.addWidget(self.log_console)
+        self.outer.addWidget(toolbar_card)
+        self.outer.addWidget(table_card, 1)
+        self.outer.addWidget(log_card)
+        self.restyle()
+        self.log_console.log("مرحباً. اضغط 'فحص الجهاز' للبدء.")
+        self.log_console.log(f"سجل العمليات يُحفظ في: {LOG_PATH}")
+    def restyle(self):
+        super().restyle()
+        p = palette()
+        self.scan_btn.setStyleSheet(accent_button_style(p["accent"], p["accent_hover"]))
+        self.clean_btn.setStyleSheet(accent_button_style(p["danger"], p["danger_hover"], fg="#2a0a0a"))
+        self.select_all_btn.setStyleSheet(ghost_button_style())
+        self.deselect_all_btn.setStyleSheet(ghost_button_style())
+        self.total_label.setStyleSheet(f"color: {p['text_dim']}; font-size: 12px;")
+    def _on_item_changed(self, item):
+        if item.column() != 0:
             return
-        col = self.tree.identify_column(event.x)
-        row = self.tree.identify_row(event.y)
-        if not row or col != "#1":
-            return
-        idx = int(row)
-        t = self.targets[idx]
-        t.selected = not t.selected
-        self.tree.set(row, "select", "✓" if t.selected else "")
-        self.update_total()
-
+        row = item.row()
+        if row < len(self.targets):
+            self.targets[row].selected = item.checkState() == Qt.Checked
+            self.update_total()
     def select_all(self):
-        for i, t in enumerate(self.targets):
-            t.selected = True
-            self.tree.set(str(i), "select", "✓")
-        self.update_total()
-
+        self._set_all(True)
     def deselect_all(self):
+        self._set_all(False)
+    def _set_all(self, value):
+        self.table.blockSignals(True)
         for i, t in enumerate(self.targets):
-            t.selected = False
-            self.tree.set(str(i), "select", "")
+            t.selected = value
+            self.table.item(i, 0).setCheckState(Qt.Checked if value else Qt.Unchecked)
+        self.table.blockSignals(False)
         self.update_total()
-
     def update_total(self):
         total = sum(t.size for t in self.targets if t.selected)
-        self.total_label.config(text=f"إجمالي الحجم المتوقع: {human_size(total)}")
-
+        self.total_label.setText(f"إجمالي الحجم المتوقع: {human_size(total)}")
     def start_scan(self):
         if self.scanning or self.cleaning:
             return
         self.scanning = True
-        self.scan_btn.config(state="disabled")
-        self.clean_btn.config(state="disabled")
-        for row in self.tree.get_children():
-            self.tree.delete(row)
+        self.scan_btn.setEnabled(False)
+        self.clean_btn.setEnabled(False)
+        self.table.setRowCount(0)
         self.targets = []
-        threading.Thread(target=self._scan_worker, daemon=True).start()
-
-    def _scan_worker(self):
-        self.log("بدء الفحص...")
-        try:
-            targets = collect_targets(self.log)
-        except Exception as e:
-            self.log(f"خطأ أثناء الفحص: {e}")
-            self.scanning = False
-            self.scan_btn.config(state="normal")
-            self.clean_btn.config(state="normal")
-            return
-        self.log(f"تم العثور على {len(targets)} عنصر. جاري حساب الأحجام...")
-        for i, t in enumerate(targets):
-            try:
-                if t.kind == "recycle_bin":
+        def work(log_fn, progress_fn):
+            targets = collect_targets(log_fn)
+            log_fn(f"تم العثور على {len(targets)} عنصر. جاري حساب الأحجام...")
+            for i, t in enumerate(targets):
+                try:
+                    if t.kind == "recycle_bin":
+                        t.size = 0
+                    else:
+                        t.size = get_dir_size(t.path, max_seconds=4) if os.path.isdir(t.path) else os.path.getsize(t.path)
+                except Exception:
                     t.size = 0
-                else:
-                    t.size = get_dir_size(t.path, max_seconds=4) if os.path.isdir(t.path) else os.path.getsize(t.path)
-            except Exception:
-                t.size = 0
-            self.set_progress(i + 1, len(targets))
+                progress_fn(i + 1, len(targets))
+            return targets
+        w = Worker(work)
+        w.log.connect(self.log_console.log)
+        w.progress.connect(self._set_progress)
+        w.done.connect(self._scan_done)
+        w.failed.connect(self._scan_failed)
+        keep_ref(self, w)
+        w.start()
+    def _set_progress(self, cur, total):
+        self.progress.setMaximum(max(total, 1))
+        self.progress.setValue(cur)
+    def _scan_failed(self, err):
+        self.log_console.log(f"خطأ أثناء الفحص: {err}")
+        self.scanning = False
+        self.scan_btn.setEnabled(True)
+        self.clean_btn.setEnabled(True)
+    def _scan_done(self, targets):
         self.targets = targets
-        self.after(0, self._populate_tree)
-
-    def _populate_tree(self):
-        for i, t in enumerate(self.targets):
-            self.tree.insert("", "end", iid=str(i), values=(
-                "✓" if t.selected else "",
-                t.category,
-                t.label,
-                t.path,
-                human_size(t.size)
-            ))
+        self.table.blockSignals(True)
+        self.table.setRowCount(len(targets))
+        for i, t in enumerate(targets):
+            check_item = QTableWidgetItem()
+            check_item.setFlags(Qt.ItemIsUserCheckable | Qt.ItemIsEnabled)
+            check_item.setCheckState(Qt.Checked if t.selected else Qt.Unchecked)
+            self.table.setItem(i, 0, check_item)
+            self.table.setItem(i, 1, QTableWidgetItem(t.category))
+            self.table.setItem(i, 2, QTableWidgetItem(t.label))
+            self.table.setItem(i, 3, QTableWidgetItem(t.path))
+            self.table.setItem(i, 4, QTableWidgetItem(human_size(t.size)))
+        self.table.blockSignals(False)
         self.update_total()
         self.scanning = False
-        self.scan_btn.config(state="normal")
-        self.clean_btn.config(state="normal")
-        self.log("اكتمل الفحص. راجع القائمة ثم اضغط بدء التنظيف.")
-
+        self.scan_btn.setEnabled(True)
+        self.clean_btn.setEnabled(True)
+        self.log_console.log("اكتمل الفحص. راجع القائمة ثم اضغط بدء التنظيف.")
     def start_cleanup(self):
         if self.scanning or self.cleaning:
             return
         if not self.targets:
-            messagebox.showinfo(APP_NAME, "قم بفحص الجهاز أولاً.")
+            QMessageBox.information(self, APP_NAME, "قم بفحص الجهاز أولاً.")
             return
         selected = [t for t in self.targets if t.selected]
         if not selected:
-            messagebox.showinfo(APP_NAME, "لم يتم تحديد أي عنصر.")
+            QMessageBox.information(self, APP_NAME, "لم يتم تحديد أي عنصر.")
             return
-        dry = self.dry_run_var.get()
+        dry = self.dry_run_check.isChecked()
         msg = (
-            "سيتم إنشاء نقطة استعادة للنظام، ثم تنفيذ معاينة فقط (بدون حذف)."
+            "سيتم تنفيذ معاينة فقط (بدون حذف)."
             if dry else
-            "سيتم إنشاء نقطة استعادة للنظام، ثم حذف العناصر المحددة فعلياً.\nهل أنت متأكد؟"
+            "سيتم حذف العناصر المحددة فعلياً. هل أنت متأكد؟"
         )
-        if not messagebox.askyesno(APP_NAME, msg):
+        if QMessageBox.question(self, APP_NAME, msg) != QMessageBox.Yes:
             return
         self.cleaning = True
-        self.scan_btn.config(state="disabled")
-        self.clean_btn.config(state="disabled")
-        threading.Thread(target=self._cleanup_worker, args=(selected, dry), daemon=True).start()
-
-    def _cleanup_worker(self, selected, dry):
-        if not dry and self.restore_var.get():
-            create_restore_point(self.log)
-        elif dry:
-            self.log("وضع المعاينة مفعّل — لن يتم حذف فعلي.")
-        self.log("جاري التنظيف...")
-        freed, deleted, errors = run_cleanup(selected, self.log, self.set_progress, dry)
-        self.log("=" * 50)
-        self.log(f"{'[معاينة] ' if dry else ''}اكتمل. عناصر تم حذفها: {deleted} | أخطاء: {errors}")
-        self.log(f"{'المساحة المتوقع تحريرها' if dry else 'المساحة المحررة'}: {human_size(freed)}")
-        self.log("=" * 50)
-        self.after(0, lambda: self._update_freed_progress(freed))
+        self.scan_btn.setEnabled(False)
+        self.clean_btn.setEnabled(False)
+        do_restore = self.restore_check.isChecked()
+        def work(log_fn, progress_fn):
+            if not dry and do_restore:
+                create_restore_point(log_fn)
+            elif dry:
+                log_fn("وضع المعاينة مفعّل — لن يتم حذف فعلي.")
+            log_fn("جاري التنظيف...")
+            freed, deleted, errors = run_cleanup(selected, log_fn, progress_fn, dry)
+            return freed, deleted, errors
+        w = Worker(work)
+        w.log.connect(self.log_console.log)
+        w.progress.connect(self._set_progress)
+        w.done.connect(lambda res: self._cleanup_done(res, dry))
+        w.failed.connect(self._scan_failed)
+        keep_ref(self, w)
+        w.start()
+    def _cleanup_done(self, result, dry):
+        freed, deleted, errors = result
+        self.log_console.log("=" * 50)
+        self.log_console.log(f"{'[معاينة] ' if dry else ''}اكتمل. عناصر تم حذفها: {deleted} | أخطاء: {errors}")
+        self.log_console.log(f"{'المساحة المتوقع تحريرها' if dry else 'المساحة المحررة'}: {human_size(freed)}")
+        self.log_console.log("=" * 50)
         self.cleaning = False
-        self.scan_btn.config(state="normal")
-        self.clean_btn.config(state="normal")
-        self.after(0, lambda: messagebox.showinfo(
-            APP_NAME,
+        self.scan_btn.setEnabled(True)
+        self.clean_btn.setEnabled(True)
+        QMessageBox.information(
+            self, APP_NAME,
             f"{'معاينة مكتملة' if dry else 'التنظيف مكتمل'}\n"
             f"العناصر: {deleted}\nالأخطاء: {errors}\n"
             f"{'المساحة المتوقعة' if dry else 'المساحة المحررة'}: {human_size(freed)}"
-        ))
-
-
-class DashboardFrame(tk.Frame):
-    def __init__(self, parent, controller):
-        super().__init__(parent, bg=BG_MAIN)
-        self.controller = controller
-        self.active = False
+        )
+class DashboardPage(BasePage, LivePage):
+    def __init__(self, parent=None):
+        BasePage.__init__(self, "لوحة الأداء المباشرة", "مراقبة استهلاك المعالج والذاكرة والقرص لحظياً.")
         self.cpu_history = []
         self.ram_history = []
         self.proc_cache = {}
-        self.temp_active = False
         self._build_ui()
-
     def _build_ui(self):
-        section_title(self, "لوحة الأداء المباشرة").pack(anchor="w", padx=20, pady=(20, 10))
-        stats = tk.Frame(self, bg=BG_MAIN)
-        stats.pack(fill="x", padx=20)
-        self.cpu_label = tk.Label(stats, text="المعالج (CPU): --%", bg=BG_MAIN, fg=FG_TEXT, font=("Segoe UI", 11))
-        self.cpu_label.grid(row=0, column=0, sticky="w", pady=6)
-        self.cpu_canvas = tk.Canvas(stats, width=320, height=50, bg=BG_PANEL, highlightthickness=0)
-        self.cpu_canvas.grid(row=0, column=1, padx=20)
-        self.ram_label = tk.Label(stats, text="الذاكرة (RAM): --%", bg=BG_MAIN, fg=FG_TEXT, font=("Segoe UI", 11))
-        self.ram_label.grid(row=1, column=0, sticky="w", pady=6)
-        self.ram_canvas = tk.Canvas(stats, width=320, height=50, bg=BG_PANEL, highlightthickness=0)
-        self.ram_canvas.grid(row=1, column=1, padx=20)
-        self.disk_label = tk.Label(stats, text="القرص C: --%", bg=BG_MAIN, fg=FG_TEXT, font=("Segoe UI", 11))
-        self.disk_label.grid(row=2, column=0, sticky="w", pady=6)
-        self.cputemp_label = tk.Label(stats, text="حرارة المعالج (CPU): -- °C", bg=BG_MAIN, fg=FG_TEXT, font=("Segoe UI", 11))
-        self.cputemp_label.grid(row=3, column=0, sticky="w", pady=6)
-        self.gputemp_label = tk.Label(stats, text="حرارة كرت الشاشة (GPU): -- °C", bg=BG_MAIN, fg=FG_TEXT, font=("Segoe UI", 11))
-        self.gputemp_label.grid(row=4, column=0, sticky="w", pady=6)
-        tk.Label(stats, text="ملاحظة: قراءة الحرارة تعتمد على دعم اللوحة الأم/التعريفات. كرت شاشة NVIDIA فقط مدعوم حالياً.",
-                 bg=BG_MAIN, fg="#9ca3af", font=("Segoe UI", 8)).grid(row=5, column=0, sticky="w", pady=(0, 6))
-        tk.Label(self, text="أكثر البرامج استهلاكاً", bg=BG_MAIN, fg=FG_TEXT, font=("Segoe UI", 11, "bold")).pack(
-            anchor="w", padx=20, pady=(20, 5))
-        wrapper, self.tree = make_treeview(self, ("name", "pid", "cpu", "ram"),
-                                            ("اسم العملية", "PID", "CPU %", "الذاكرة"), (260, 80, 100, 120))
-        wrapper.pack(fill="both", expand=True, padx=20, pady=(0, 20))
-
+        stats_row = QHBoxLayout()
+        stats_row.setSpacing(14)
+        self.cpu_card = StatCard("المعالج (CPU)", "--%", "accent")
+        self.ram_card = StatCard("الذاكرة (RAM)", "--%", "accent2")
+        self.disk_card = StatCard("القرص C", "--%", "purple")
+        self.cputemp_card = StatCard("حرارة المعالج", "-- °C", "warn")
+        self.gputemp_card = StatCard("حرارة كرت الشاشة", "-- °C", "danger")
+        for c in (self.cpu_card, self.ram_card, self.disk_card, self.cputemp_card, self.gputemp_card):
+            self.add_card(c)
+            stats_row.addWidget(c)
+        self.outer.addLayout(stats_row)
+        graphs_card = self.add_card(Card(self))
+        gl = QVBoxLayout(graphs_card)
+        gl.setContentsMargins(18, 16, 18, 16)
+        gl.setSpacing(10)
+        gl.addWidget(QLabel("منحنى الاستخدام (آخر 60 قراءة)"))
+        graphs_row = QHBoxLayout()
+        cpu_col = QVBoxLayout()
+        self.cpu_glabel = QLabel("المعالج")
+        cpu_col.addWidget(self.cpu_glabel)
+        self.cpu_spark = Sparkline("accent")
+        cpu_col.addWidget(self.cpu_spark)
+        ram_col = QVBoxLayout()
+        self.ram_glabel = QLabel("الذاكرة")
+        ram_col.addWidget(self.ram_glabel)
+        self.ram_spark = Sparkline("accent2")
+        ram_col.addWidget(self.ram_spark)
+        graphs_row.addLayout(cpu_col)
+        graphs_row.addLayout(ram_col)
+        gl.addLayout(graphs_row)
+        self.outer.addWidget(graphs_card)
+        table_card = self.add_card(Card(self))
+        tl = QVBoxLayout(table_card)
+        tl.setContentsMargins(18, 16, 18, 16)
+        tl.addWidget(QLabel("أكثر البرامج استهلاكاً"))
+        self.table = make_table(["اسم العملية", "PID", "CPU %", "الذاكرة"], [260, 90, 100, 140])
+        tl.addWidget(self.table, 1)
+        self.outer.addWidget(table_card, 1)
+        self.note_lbl = hint_label("ملاحظة: قراءة الحرارة تعتمد على دعم اللوحة الأم/التعريفات. كرت شاشة NVIDIA فقط مدعوم حالياً.")
+        self.outer.addWidget(self.note_lbl)
+        self.restyle()
+    def restyle(self):
+        super().restyle()
+        for lbl in (self.cpu_glabel, self.ram_glabel):
+            lbl.setStyleSheet(f"color: {palette()['text_dim']}; font-size: 11px; font-weight: 600;")
+        self.note_lbl.setStyleSheet(f"color: {palette()['text_faint']}; font-size: 11px;")
+        self.cpu_spark.update()
+        self.ram_spark.update()
     def on_show(self):
-        self.active = True
-        self.temp_active = True
         if psutil is None:
-            messagebox.showerror(APP_NAME, "المكتبة psutil غير مثبتة.\nنفّذ الأمر التالي في cmd:\npip install psutil")
+            QMessageBox.critical(self, APP_NAME, "المكتبة psutil غير مثبتة.\nنفّذ الأمر التالي في cmd:\npip install psutil")
             return
-        self._loop()
-        self._temp_loop()
-
+        self.start_live(1500, self._collect, self._render)
+        self._temp_timer = QTimer(self)
+        self._temp_timer.timeout.connect(self._collect_temps)
+        self._temp_timer.start(5000)
+        self._collect_temps()
     def on_hide(self):
-        self.active = False
-        self.temp_active = False
-
-    def _loop(self):
-        if not self.active:
-            return
-        threading.Thread(target=self._update_once, daemon=True).start()
-        self.after(1500, self._loop)
-
-    def _temp_loop(self):
-        if not self.temp_active:
-            return
-        threading.Thread(target=self._update_temps, daemon=True).start()
-        self.after(5000, self._temp_loop)
-
-    def _update_temps(self):
-        cpu_temp = get_cpu_temp()
-        gpu_temp = get_gpu_temp()
-        self.after(0, lambda: self._render_temps(cpu_temp, gpu_temp))
-
-    def _render_temps(self, cpu_temp, gpu_temp):
-        self.cputemp_label.config(
-            text=f"حرارة المعالج (CPU): {cpu_temp:.0f} °C" if cpu_temp is not None else "حرارة المعالج (CPU): غير متوفرة")
-        self.gputemp_label.config(
-            text=f"حرارة كرت الشاشة (GPU): {gpu_temp:.0f} °C" if gpu_temp is not None else "حرارة كرت الشاشة (GPU): غير متوفرة")
-
-    def _update_once(self):
+        self.stop_live()
+        if hasattr(self, "_temp_timer"):
+            self._temp_timer.stop()
+    def _collect(self):
+        cpu = psutil.cpu_percent(interval=0.3)
+        vm = psutil.virtual_memory()
         try:
-            cpu = psutil.cpu_percent(interval=0.4)
-            vm = psutil.virtual_memory()
             total, used, free = shutil.disk_usage("C:\\")
             disk_percent = used / total * 100 if total else 0
-            current_pids = set(psutil.pids())
-            for pid in list(self.proc_cache):
-                if pid not in current_pids:
-                    del self.proc_cache[pid]
-            for pid in current_pids:
-                if pid not in self.proc_cache:
-                    try:
-                        proc = psutil.Process(pid)
-                        proc.cpu_percent(None)
-                        self.proc_cache[pid] = proc
-                    except Exception:
-                        continue
-            rows = []
-            for pid, proc in list(self.proc_cache.items()):
+        except Exception:
+            disk_percent = 0
+        current_pids = set(psutil.pids())
+        for pid in list(self.proc_cache):
+            if pid not in current_pids:
+                del self.proc_cache[pid]
+        for pid in current_pids:
+            if pid not in self.proc_cache:
                 try:
-                    cpu_p = proc.cpu_percent(None)
-                    mem = proc.memory_info().rss
-                    name = proc.name()
-                    rows.append((name, pid, cpu_p, mem))
+                    proc = psutil.Process(pid)
+                    proc.cpu_percent(None)
+                    self.proc_cache[pid] = proc
                 except Exception:
                     continue
-            rows.sort(key=lambda x: x[2], reverse=True)
-            top = rows[:12]
-        except Exception:
-            return
-        self.after(0, lambda: self._render(cpu, vm.percent, disk_percent, top))
-
-    def _render(self, cpu, ram_percent, disk_percent, top):
+        rows = []
+        for pid, proc in list(self.proc_cache.items()):
+            try:
+                rows.append((proc.name(), pid, proc.cpu_percent(None), proc.memory_info().rss))
+            except Exception:
+                continue
+        rows.sort(key=lambda x: x[2], reverse=True)
+        return cpu, vm.percent, disk_percent, rows[:12]
+    def _render(self, result):
+        cpu, ram_percent, disk_percent, top = result
         self.cpu_history.append(cpu)
         self.ram_history.append(ram_percent)
         self.cpu_history = self.cpu_history[-60:]
         self.ram_history = self.ram_history[-60:]
-        self.cpu_label.config(text=f"المعالج (CPU): {cpu:.1f}%")
-        self.ram_label.config(text=f"الذاكرة (RAM): {ram_percent:.1f}%")
-        self.disk_label.config(text=f"القرص C: {disk_percent:.1f}%")
-        draw_sparkline(self.cpu_canvas, self.cpu_history, ACCENT)
-        draw_sparkline(self.ram_canvas, self.ram_history, ACCENT2)
-        for row in self.tree.get_children():
-            self.tree.delete(row)
-        for name, pid, cpu_p, mem in top:
-            self.tree.insert("", "end", values=(name, pid, f"{cpu_p:.1f}", human_size(mem)))
-
-
-class ProcessFrame(tk.Frame):
-    def __init__(self, parent, controller):
-        super().__init__(parent, bg=BG_MAIN)
-        self.controller = controller
-        self.active = False
+        self.cpu_card.set_value(f"{cpu:.1f}%")
+        self.ram_card.set_value(f"{ram_percent:.1f}%")
+        self.disk_card.set_value(f"{disk_percent:.1f}%")
+        self.cpu_spark.set_data(self.cpu_history)
+        self.ram_spark.set_data(self.ram_history)
+        self.table.setRowCount(len(top))
+        for i, (name, pid, cpu_p, mem) in enumerate(top):
+            self.table.setItem(i, 0, QTableWidgetItem(name))
+            self.table.setItem(i, 1, QTableWidgetItem(str(pid)))
+            self.table.setItem(i, 2, QTableWidgetItem(f"{cpu_p:.1f}"))
+            self.table.setItem(i, 3, QTableWidgetItem(human_size(mem)))
+    def _collect_temps(self):
+        w = SimpleWorker(lambda: (get_cpu_temp(), get_gpu_temp()))
+        w.done.connect(self._render_temps)
+        keep_ref(self, w)
+        w.start()
+    def _render_temps(self, result):
+        cpu_temp, gpu_temp = result
+        self.cputemp_card.set_value(f"{cpu_temp:.0f} °C" if cpu_temp is not None else "غير متوفرة")
+        self.gputemp_card.set_value(f"{gpu_temp:.0f} °C" if gpu_temp is not None else "غير متوفرة")
+class ProcessesPage(BasePage, LivePage):
+    def __init__(self, parent=None):
+        BasePage.__init__(self, "إدارة العمليات الذكية", "تصنيف تلقائي للعمليات (نظام / مستخدم / خلفية) مع إمكانية الإنهاء الآمن.")
         self.proc_cache = {}
-        self.filter_var = tk.StringVar(value="الكل")
+        self.rows_cache = []
         self._build_ui()
-
     def _build_ui(self):
-        section_title(self, "إدارة العمليات الذكية").pack(anchor="w", padx=20, pady=(20, 10))
-        toolbar = tk.Frame(self, bg=BG_MAIN)
-        toolbar.pack(fill="x", padx=20)
-        tk.Label(toolbar, text="تصفية:", bg=BG_MAIN, fg=FG_TEXT).pack(side="left")
-        filter_box = ttk.Combobox(toolbar, textvariable=self.filter_var, state="readonly",
-                                   values=["الكل", "System", "User", "Background"], width=14)
-        filter_box.pack(side="left", padx=8)
-        ttk.Button(toolbar, text="إنهاء العملية المحددة", command=self.kill_selected).pack(side="left", padx=8)
-        wrapper, self.tree = make_treeview(self, ("name", "pid", "category", "cpu", "ram"),
-                                            ("اسم العملية", "PID", "التصنيف", "CPU %", "الذاكرة"),
-                                            (240, 80, 110, 90, 120))
-        wrapper.pack(fill="both", expand=True, padx=20, pady=15)
-
+        toolbar_card = self.add_card(Card(self))
+        tl = QHBoxLayout(toolbar_card)
+        tl.setContentsMargins(18, 14, 18, 14)
+        tl.addWidget(QLabel("تصفية:"))
+        self.filter_combo = QComboBox()
+        self.filter_combo.addItems(["الكل", "System", "User", "Background"])
+        self.filter_combo.currentTextChanged.connect(self._apply_filter)
+        tl.addWidget(self.filter_combo)
+        self.kill_btn = QPushButton("⛔  إنهاء العملية المحددة")
+        self.kill_btn.setCursor(Qt.PointingHandCursor)
+        self.kill_btn.clicked.connect(self.kill_selected)
+        tl.addWidget(self.kill_btn)
+        tl.addStretch()
+        table_card = self.add_card(Card(self))
+        tcl = QVBoxLayout(table_card)
+        tcl.setContentsMargins(18, 16, 18, 16)
+        self.table = make_table(["اسم العملية", "PID", "التصنيف", "CPU %", "الذاكرة"], [240, 90, 110, 90, 130])
+        tcl.addWidget(self.table, 1)
+        self.outer.addWidget(toolbar_card)
+        self.outer.addWidget(table_card, 1)
+        self.restyle()
+    def restyle(self):
+        super().restyle()
+        p = palette()
+        self.kill_btn.setStyleSheet(accent_button_style(p["danger"], p["danger_hover"], fg="#2a0a0a"))
     def on_show(self):
-        self.active = True
         if psutil is None:
-            messagebox.showerror(APP_NAME, "المكتبة psutil غير مثبتة.\nنفّذ: pip install psutil")
+            QMessageBox.critical(self, APP_NAME, "المكتبة psutil غير مثبتة.\nنفّذ: pip install psutil")
             return
-        self._loop()
-
+        self.start_live(2000, self._collect, self._on_collected)
     def on_hide(self):
-        self.active = False
-
-    def _loop(self):
-        if not self.active:
-            return
-        threading.Thread(target=self._update_once, daemon=True).start()
-        self.after(2000, self._loop)
-
-    def _update_once(self):
-        try:
-            current_pids = set(psutil.pids())
-            for pid in list(self.proc_cache):
-                if pid not in current_pids:
-                    del self.proc_cache[pid]
-            for pid in current_pids:
-                if pid not in self.proc_cache:
-                    try:
-                        proc = psutil.Process(pid)
-                        proc.cpu_percent(None)
-                        self.proc_cache[pid] = proc
-                    except Exception:
-                        continue
-            rows = []
-            for pid, proc in list(self.proc_cache.items()):
+        self.stop_live()
+    def _collect(self):
+        current_pids = set(psutil.pids())
+        for pid in list(self.proc_cache):
+            if pid not in current_pids:
+                del self.proc_cache[pid]
+        for pid in current_pids:
+            if pid not in self.proc_cache:
                 try:
-                    name = proc.name()
-                    exe = proc.exe() if proc.exe() else ""
-                    username = proc.username() if hasattr(proc, "username") else ""
-                    category = categorize_process(exe, username, name)
-                    cpu_p = proc.cpu_percent(None)
-                    mem = proc.memory_info().rss
-                    rows.append((name, pid, category, cpu_p, mem))
+                    proc = psutil.Process(pid)
+                    proc.cpu_percent(None)
+                    self.proc_cache[pid] = proc
                 except Exception:
                     continue
-            rows.sort(key=lambda x: x[3], reverse=True)
-        except Exception:
-            return
-        self.after(0, lambda: self._render(rows))
-
-    def _render(self, rows):
-        flt = self.filter_var.get()
-        for row in self.tree.get_children():
-            self.tree.delete(row)
-        for name, pid, category, cpu_p, mem in rows:
-            if flt != "الكل" and category != flt:
+        rows = []
+        for pid, proc in list(self.proc_cache.items()):
+            try:
+                name = proc.name()
+                exe = proc.exe() if proc.exe() else ""
+                username = proc.username() if hasattr(proc, "username") else ""
+                category = categorize_process(exe, username, name)
+                rows.append((name, pid, category, proc.cpu_percent(None), proc.memory_info().rss))
+            except Exception:
                 continue
-            self.tree.insert("", "end", values=(name, pid, category, f"{cpu_p:.1f}", human_size(mem)))
-
+        rows.sort(key=lambda x: x[3], reverse=True)
+        return rows
+    def _on_collected(self, rows):
+        self.rows_cache = rows
+        self._apply_filter()
+    def _apply_filter(self):
+        flt = self.filter_combo.currentText()
+        rows = [r for r in self.rows_cache if flt == "الكل" or r[2] == flt]
+        self.table.setRowCount(len(rows))
+        for i, (name, pid, category, cpu_p, mem) in enumerate(rows):
+            self.table.setItem(i, 0, QTableWidgetItem(name))
+            self.table.setItem(i, 1, QTableWidgetItem(str(pid)))
+            self.table.setItem(i, 2, QTableWidgetItem(category))
+            self.table.setItem(i, 3, QTableWidgetItem(f"{cpu_p:.1f}"))
+            self.table.setItem(i, 4, QTableWidgetItem(human_size(mem)))
     def kill_selected(self):
-        sel = self.tree.selection()
-        if not sel:
-            messagebox.showinfo(APP_NAME, "اختر عملية من القائمة أولاً.")
+        row = self.table.currentRow()
+        if row < 0:
+            QMessageBox.information(self, APP_NAME, "اختر عملية من القائمة أولاً.")
             return
-        values = self.tree.item(sel[0], "values")
-        pid = int(values[1])
-        if values[0].lower() in CRITICAL_PROCESSES:
-            messagebox.showwarning(APP_NAME, "لا يمكن إنهاء عملية نظام أساسية.")
+        name = self.table.item(row, 0).text()
+        pid = int(self.table.item(row, 1).text())
+        if name.lower() in CRITICAL_PROCESSES:
+            QMessageBox.warning(self, APP_NAME, "لا يمكن إنهاء عملية نظام أساسية.")
             return
-        if not messagebox.askyesno(APP_NAME, f"هل تريد إنهاء العملية {values[0]} (PID {pid})؟"):
+        if QMessageBox.question(self, APP_NAME, f"هل تريد إنهاء العملية {name} (PID {pid})؟") != QMessageBox.Yes:
             return
         try:
             psutil.Process(pid).terminate()
         except Exception as e:
-            messagebox.showerror(APP_NAME, f"تعذر إنهاء العملية: {e}")
-
-
-class StartupFrame(tk.Frame):
-    def __init__(self, parent, controller):
-        super().__init__(parent, bg=BG_MAIN)
-        self.controller = controller
+            QMessageBox.critical(self, APP_NAME, f"تعذر إنهاء العملية: {e}")
+class StartupPage(BasePage):
+    def __init__(self, parent=None):
+        super().__init__("محسّن الإقلاع", "تحكّم بالبرامج التي تعمل تلقائياً مع بدء تشغيل ويندوز.")
         self.entries = []
         self._build_ui()
-
     def _build_ui(self):
-        section_title(self, "محسّن الإقلاع").pack(anchor="w", padx=20, pady=(20, 10))
-        toolbar = tk.Frame(self, bg=BG_MAIN)
-        toolbar.pack(fill="x", padx=20)
-        ttk.Button(toolbar, text="تحديث القائمة", command=self.refresh).pack(side="left")
-        ttk.Button(toolbar, text="تعطيل المحدد", command=self.disable_selected).pack(side="left", padx=8)
-        ttk.Button(toolbar, text="تفعيل المحدد", command=self.enable_selected).pack(side="left", padx=8)
-        wrapper, self.tree = make_treeview(self, ("name", "status", "impact", "source", "command"),
-                                            ("الاسم", "الحالة", "التأثير المتوقع", "المصدر", "الأمر / المسار"),
-                                            (180, 90, 130, 110, 320))
-        wrapper.pack(fill="both", expand=True, padx=20, pady=15)
-
+        toolbar_card = self.add_card(Card(self))
+        tl = QHBoxLayout(toolbar_card)
+        tl.setContentsMargins(18, 14, 18, 14)
+        self.refresh_btn = QPushButton("🔄  تحديث القائمة")
+        self.refresh_btn.setCursor(Qt.PointingHandCursor)
+        self.refresh_btn.clicked.connect(self.refresh)
+        self.disable_btn = QPushButton("تعطيل المحدد")
+        self.disable_btn.setCursor(Qt.PointingHandCursor)
+        self.disable_btn.clicked.connect(self.disable_selected)
+        self.enable_btn = QPushButton("تفعيل المحدد")
+        self.enable_btn.setCursor(Qt.PointingHandCursor)
+        self.enable_btn.clicked.connect(self.enable_selected)
+        for b in (self.refresh_btn, self.disable_btn, self.enable_btn):
+            tl.addWidget(b)
+        tl.addStretch()
+        table_card = self.add_card(Card(self))
+        tcl = QVBoxLayout(table_card)
+        tcl.setContentsMargins(18, 16, 18, 16)
+        self.table = make_table(["الاسم", "الحالة", "التأثير المتوقع", "المصدر", "الأمر / المسار"],
+                                 [170, 90, 130, 100, 320])
+        tcl.addWidget(self.table, 1)
+        self.outer.addWidget(toolbar_card)
+        self.outer.addWidget(table_card, 1)
+        self.restyle()
+    def restyle(self):
+        super().restyle()
+        p = palette()
+        self.refresh_btn.setStyleSheet(accent_button_style(p["accent"], p["accent_hover"]))
+        self.disable_btn.setStyleSheet(ghost_button_style())
+        self.enable_btn.setStyleSheet(ghost_button_style())
     def on_show(self):
         self.refresh()
-
-    def on_hide(self):
-        pass
-
     def refresh(self):
-        for row in self.tree.get_children():
-            self.tree.delete(row)
-        self.entries = get_startup_entries()
-        for i, e in enumerate(self.entries):
-            status = "مفعّل" if e.get("enabled", True) else "معطّل"
+        w = SimpleWorker(get_startup_entries)
+        w.done.connect(self._on_refreshed)
+        keep_ref(self, w)
+        w.start()
+    def _on_refreshed(self, entries):
+        self.entries = entries
+        self.table.setRowCount(len(entries))
+        p = palette()
+        for i, e in enumerate(entries):
+            enabled = e.get("enabled", True)
+            status = "مفعّل" if enabled else "معطّل"
             score = impact_score(e["name"], e.get("command", ""))
-            self.tree.insert("", "end", iid=str(i), values=(e["name"], status, score, e["source"], e.get("command", "")))
-
+            self.table.setItem(i, 0, QTableWidgetItem(e["name"]))
+            status_item = QTableWidgetItem(status)
+            status_item.setForeground(QColor(p["accent"] if enabled else p["text_faint"]))
+            self.table.setItem(i, 1, status_item)
+            self.table.setItem(i, 2, QTableWidgetItem(score))
+            self.table.setItem(i, 3, QTableWidgetItem(e["source"]))
+            self.table.setItem(i, 4, QTableWidgetItem(e.get("command", "")))
     def disable_selected(self):
-        sel = self.tree.selection()
-        if not sel:
-            messagebox.showinfo(APP_NAME, "اختر عنصراً من القائمة أولاً.")
+        row = self.table.currentRow()
+        if row < 0:
+            QMessageBox.information(self, APP_NAME, "اختر عنصراً من القائمة أولاً.")
             return
-        idx = int(sel[0])
-        entry = self.entries[idx]
+        entry = self.entries[row]
         if not entry.get("enabled", True):
-            messagebox.showinfo(APP_NAME, "هذا العنصر معطّل بالفعل.")
+            QMessageBox.information(self, APP_NAME, "هذا العنصر معطّل بالفعل.")
             return
         if disable_startup_entry(entry):
-            messagebox.showinfo(APP_NAME, f"تم تعطيل {entry['name']} من الإقلاع.")
+            QMessageBox.information(self, APP_NAME, f"تم تعطيل {entry['name']} من الإقلاع.")
         else:
-            messagebox.showerror(APP_NAME, "تعذر تعطيل هذا العنصر.")
+            QMessageBox.critical(self, APP_NAME, "تعذر تعطيل هذا العنصر.")
         self.refresh()
-
     def enable_selected(self):
-        sel = self.tree.selection()
-        if not sel:
-            messagebox.showinfo(APP_NAME, "اختر عنصراً من القائمة أولاً.")
+        row = self.table.currentRow()
+        if row < 0:
+            QMessageBox.information(self, APP_NAME, "اختر عنصراً من القائمة أولاً.")
             return
-        idx = int(sel[0])
-        entry = self.entries[idx]
+        entry = self.entries[row]
         if entry.get("enabled", True):
-            messagebox.showinfo(APP_NAME, "هذا العنصر مفعّل بالفعل.")
+            QMessageBox.information(self, APP_NAME, "هذا العنصر مفعّل بالفعل.")
             return
         if enable_startup_entry(entry):
-            messagebox.showinfo(APP_NAME, f"تم تفعيل {entry['name']} في الإقلاع.")
+            QMessageBox.information(self, APP_NAME, f"تم تفعيل {entry['name']} في الإقلاع.")
         else:
-            messagebox.showerror(APP_NAME, "تعذر تفعيل هذا العنصر.")
+            QMessageBox.critical(self, APP_NAME, "تعذر تفعيل هذا العنصر.")
         self.refresh()
-
-
-class ExplorerFrame(tk.Frame):
-    def __init__(self, parent, controller):
-        super().__init__(parent, bg=BG_MAIN)
-        self.controller = controller
-        self.path_var = tk.StringVar(value="C:\\")
-        self.name_var = tk.StringVar(value="")
-        self.ext_var = tk.StringVar(value="الكل")
-        self.min_size_var = tk.StringVar(value="0")
+class ExplorerPage(BasePage):
+    def __init__(self, parent=None):
+        super().__init__("مستكشف الملفات المتقدم", "بحث متقدّم بالاسم والنوع والحجم، أو عرض أكبر الملفات.")
         self.results = []
-        self._build_ui()
-
-    def _build_ui(self):
-        section_title(self, "مستكشف الملفات المتقدم").pack(anchor="w", padx=20, pady=(20, 10))
-        row1 = tk.Frame(self, bg=BG_MAIN)
-        row1.pack(fill="x", padx=20)
-        tk.Label(row1, text="المسار:", bg=BG_MAIN, fg=FG_TEXT).pack(side="left")
-        ttk.Entry(row1, textvariable=self.path_var, width=45).pack(side="left", padx=5)
-        ttk.Button(row1, text="استعراض", command=self.browse).pack(side="left", padx=5)
-        row2 = tk.Frame(self, bg=BG_MAIN)
-        row2.pack(fill="x", padx=20, pady=8)
-        tk.Label(row2, text="اسم يحتوي على:", bg=BG_MAIN, fg=FG_TEXT).pack(side="left")
-        ttk.Entry(row2, textvariable=self.name_var, width=20).pack(side="left", padx=5)
-        tk.Label(row2, text="النوع:", bg=BG_MAIN, fg=FG_TEXT).pack(side="left", padx=(15, 0))
-        ttk.Combobox(row2, textvariable=self.ext_var, state="readonly",
-                     values=["الكل"] + list(EXT_CATEGORIES.keys()), width=12).pack(side="left", padx=5)
-        tk.Label(row2, text="أقل حجم (MB):", bg=BG_MAIN, fg=FG_TEXT).pack(side="left", padx=(15, 0))
-        ttk.Entry(row2, textvariable=self.min_size_var, width=8).pack(side="left", padx=5)
-        ttk.Button(row2, text="بحث", command=self.start_search).pack(side="left", padx=(15, 0))
-        ttk.Button(row2, text="أكبر الملفات", command=self.start_largest).pack(side="left", padx=8)
-        wrapper, self.tree = make_treeview(self, ("name", "path", "size", "date"),
-                                            ("الاسم", "المسار", "الحجم", "تاريخ التعديل"), (220, 380, 100, 150))
-        wrapper.pack(fill="both", expand=True, padx=20, pady=15)
-        for col in ("name", "path", "size", "date"):
-            self.tree.heading(col, command=lambda c=col: self.sort_by(c))
-        self.status_label = tk.Label(self, text="", bg=BG_MAIN, fg=FG_TEXT, font=("Segoe UI", 9))
-        self.status_label.pack(anchor="w", padx=20, pady=(0, 10))
         self._sort_reverse = {}
-
+        self._build_ui()
+    def _build_ui(self):
+        filters_card = self.add_card(Card(self))
+        fl = QVBoxLayout(filters_card)
+        fl.setContentsMargins(18, 14, 18, 14)
+        fl.setSpacing(10)
+        row1 = QHBoxLayout()
+        row1.addWidget(QLabel("المسار:"))
+        self.path_edit = QLineEdit("C:\\")
+        row1.addWidget(self.path_edit, 1)
+        self.browse_btn = QPushButton("استعراض")
+        self.browse_btn.setCursor(Qt.PointingHandCursor)
+        self.browse_btn.clicked.connect(self.browse)
+        row1.addWidget(self.browse_btn)
+        fl.addLayout(row1)
+        row2 = QHBoxLayout()
+        row2.addWidget(QLabel("اسم يحتوي على:"))
+        self.name_edit = QLineEdit()
+        row2.addWidget(self.name_edit)
+        row2.addWidget(QLabel("النوع:"))
+        self.ext_combo = QComboBox()
+        self.ext_combo.addItems(["الكل"] + list(EXT_CATEGORIES.keys()))
+        row2.addWidget(self.ext_combo)
+        row2.addWidget(QLabel("أقل حجم (MB):"))
+        self.min_size_edit = QLineEdit("0")
+        self.min_size_edit.setFixedWidth(70)
+        row2.addWidget(self.min_size_edit)
+        self.search_btn = QPushButton("🔍  بحث")
+        self.search_btn.setCursor(Qt.PointingHandCursor)
+        self.search_btn.clicked.connect(self.start_search)
+        row2.addWidget(self.search_btn)
+        self.largest_btn = QPushButton("أكبر الملفات")
+        self.largest_btn.setCursor(Qt.PointingHandCursor)
+        self.largest_btn.clicked.connect(self.start_largest)
+        row2.addWidget(self.largest_btn)
+        row2.addStretch()
+        fl.addLayout(row2)
+        table_card = self.add_card(Card(self))
+        tcl = QVBoxLayout(table_card)
+        tcl.setContentsMargins(18, 16, 18, 16)
+        self.table = make_table(["الاسم", "المسار", "الحجم", "تاريخ التعديل"], [220, 380, 100, 150])
+        self.table.horizontalHeader().sectionClicked.connect(self._sort_by_index)
+        tcl.addWidget(self.table, 1)
+        self.status_lbl = QLabel("")
+        tcl.addWidget(self.status_lbl)
+        self.outer.addWidget(filters_card)
+        self.outer.addWidget(table_card, 1)
+        self.restyle()
+    def restyle(self):
+        super().restyle()
+        p = palette()
+        self.browse_btn.setStyleSheet(ghost_button_style())
+        self.search_btn.setStyleSheet(accent_button_style(p["accent"], p["accent_hover"]))
+        self.largest_btn.setStyleSheet(ghost_button_style())
+        self.status_lbl.setStyleSheet(f"color: {p['text_dim']}; font-size: 11.5px;")
     def browse(self):
-        d = filedialog.askdirectory()
+        d = QFileDialog.getExistingDirectory(self, "اختر مجلد")
         if d:
-            self.path_var.set(d)
-
+            self.path_edit.setText(d)
     def start_search(self):
-        self.status_label.config(text="جاري البحث...")
-        threading.Thread(target=self._search_worker, args=(False,), daemon=True).start()
-
+        self.status_lbl.setText("جاري البحث...")
+        self._run_search(False)
     def start_largest(self):
-        self.status_label.config(text="جاري البحث عن أكبر الملفات...")
-        threading.Thread(target=self._search_worker, args=(True,), daemon=True).start()
-
-    def _search_worker(self, largest_mode):
+        self.status_lbl.setText("جاري البحث عن أكبر الملفات...")
+        self._run_search(True)
+    def _run_search(self, largest_mode):
         try:
-            min_mb = float(self.min_size_var.get() or 0)
+            min_mb = float(self.min_size_edit.text() or 0)
         except ValueError:
             min_mb = 0
         min_bytes = int(min_mb * 1024 * 1024)
-        root_path = self.path_var.get().strip() or "C:\\"
-        results = scan_files(root_path, self.name_var.get().strip(), self.ext_var.get(), min_bytes)
-        if largest_mode:
-            results.sort(key=lambda r: r[2], reverse=True)
-            results = results[:100]
+        root_path = self.path_edit.text().strip() or "C:\\"
+        name_filter = self.name_edit.text().strip()
+        ext_filter = self.ext_combo.currentText()
+        def work():
+            results = scan_files(root_path, name_filter, ext_filter, min_bytes)
+            if largest_mode:
+                results.sort(key=lambda r: r[2], reverse=True)
+                results = results[:100]
+            return results
+        w = SimpleWorker(work)
+        w.done.connect(self._populate)
+        keep_ref(self, w)
+        w.start()
+    def _populate(self, results):
         self.results = results
-        self.after(0, self._populate)
-
-    def _populate(self):
-        for row in self.tree.get_children():
-            self.tree.delete(row)
-        for name, full, size, mtime in self.results:
+        self.table.setRowCount(len(results))
+        for i, (name, full, size, mtime) in enumerate(results):
             date_str = datetime.fromtimestamp(mtime).strftime("%Y-%m-%d %H:%M")
-            self.tree.insert("", "end", values=(name, full, human_size(size), date_str))
-        self.status_label.config(text=f"تم العثور على {len(self.results)} ملف.")
-
-    def sort_by(self, col):
-        idx_map = {"name": 0, "path": 1, "size": 2, "date": 3}
-        idx = idx_map[col]
-        reverse = self._sort_reverse.get(col, False)
+            self.table.setItem(i, 0, QTableWidgetItem(name))
+            self.table.setItem(i, 1, QTableWidgetItem(full))
+            self.table.setItem(i, 2, QTableWidgetItem(human_size(size)))
+            self.table.setItem(i, 3, QTableWidgetItem(date_str))
+        self.status_lbl.setText(f"تم العثور على {len(results)} ملف.")
+    def _sort_by_index(self, col_index):
+        idx_map = {0: 0, 1: 1, 2: 2, 3: 3}
+        idx = idx_map.get(col_index, 0)
+        reverse = self._sort_reverse.get(col_index, False)
         self.results.sort(key=lambda r: r[idx], reverse=reverse)
-        self._sort_reverse[col] = not reverse
-        self._populate()
-
-
-class SysInfoFrame(tk.Frame):
-    def __init__(self, parent, controller):
-        super().__init__(parent, bg=BG_MAIN)
-        self.controller = controller
+        self._sort_reverse[col_index] = not reverse
+        self._populate(self.results)
+class SysInfoPage(BasePage):
+    def __init__(self, parent=None):
+        super().__init__("معلومات النظام", "نظرة شاملة على مواصفات الجهاز، مع إمكانية تصدير تقرير PDF.")
         self.info = {}
         self._build_ui()
-
     def _build_ui(self):
-        section_title(self, "معلومات النظام").pack(anchor="w", padx=20, pady=(20, 10))
-        toolbar = tk.Frame(self, bg=BG_MAIN)
-        toolbar.pack(fill="x", padx=20)
-        ttk.Button(toolbar, text="تحديث", command=self.refresh).pack(side="left")
-        ttk.Button(toolbar, text="تصدير تقرير PDF", command=self.export_pdf).pack(side="left", padx=8)
-        wrapper, self.tree = make_treeview(self, ("key", "value"), ("الخاصية", "القيمة"), (200, 500))
-        wrapper.pack(fill="both", expand=True, padx=20, pady=15)
-
+        toolbar_card = self.add_card(Card(self))
+        tl = QHBoxLayout(toolbar_card)
+        tl.setContentsMargins(18, 14, 18, 14)
+        self.refresh_btn = QPushButton("🔄  تحديث")
+        self.refresh_btn.setCursor(Qt.PointingHandCursor)
+        self.refresh_btn.clicked.connect(self.refresh)
+        self.export_btn = QPushButton("📄  تصدير تقرير PDF")
+        self.export_btn.setCursor(Qt.PointingHandCursor)
+        self.export_btn.clicked.connect(self.export_pdf)
+        tl.addWidget(self.refresh_btn)
+        tl.addWidget(self.export_btn)
+        tl.addStretch()
+        table_card = self.add_card(Card(self))
+        tcl = QVBoxLayout(table_card)
+        tcl.setContentsMargins(18, 16, 18, 16)
+        self.table = make_table(["الخاصية", "القيمة"], [220, 520])
+        tcl.addWidget(self.table, 1)
+        self.outer.addWidget(toolbar_card)
+        self.outer.addWidget(table_card, 1)
+        self.restyle()
+    def restyle(self):
+        super().restyle()
+        p = palette()
+        self.refresh_btn.setStyleSheet(accent_button_style(p["accent"], p["accent_hover"]))
+        self.export_btn.setStyleSheet(ghost_button_style())
     def on_show(self):
         if not self.info:
             self.refresh()
-
-    def on_hide(self):
-        pass
-
     def refresh(self):
-        threading.Thread(target=self._worker, daemon=True).start()
-
-    def _worker(self):
-        info = get_system_info()
-        self.after(0, lambda: self._populate(info))
-
+        w = SimpleWorker(get_system_info)
+        w.done.connect(self._populate)
+        keep_ref(self, w)
+        w.start()
     def _populate(self, info):
         self.info = info
-        for row in self.tree.get_children():
-            self.tree.delete(row)
-        for k, v in info.items():
-            self.tree.insert("", "end", values=(k, v))
-
+        self.table.setRowCount(len(info))
+        for i, (k, v) in enumerate(info.items()):
+            self.table.setItem(i, 0, QTableWidgetItem(k))
+            self.table.setItem(i, 1, QTableWidgetItem(str(v)))
     def export_pdf(self):
         if not self.info:
-            messagebox.showinfo(APP_NAME, "قم بالتحديث أولاً.")
+            QMessageBox.information(self, APP_NAME, "قم بالتحديث أولاً.")
             return
-        path = filedialog.asksaveasfilename(defaultextension=".pdf", filetypes=[("PDF", "*.pdf")],
-                                             initialfile="system_report.pdf")
+        path, _ = QFileDialog.getSaveFileName(self, "حفظ التقرير", "system_report.pdf", "PDF (*.pdf)")
         if not path:
             return
         lines = [f"PC Suite Pro - System Report", f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}", ""]
@@ -1823,575 +2185,863 @@ class SysInfoFrame(tk.Frame):
             lines.append(f"{k}: {v}")
         try:
             text_report_to_pdf(lines, path)
-            messagebox.showinfo(APP_NAME, f"تم حفظ التقرير في:\n{path}")
+            QMessageBox.information(self, APP_NAME, f"تم حفظ التقرير في:\n{path}")
         except Exception as e:
-            messagebox.showerror(APP_NAME, f"تعذر إنشاء الملف: {e}")
-
-
-class NetworkFrame(tk.Frame):
-    def __init__(self, parent, controller):
-        super().__init__(parent, bg=BG_MAIN)
-        self.controller = controller
-        self.active = False
+            QMessageBox.critical(self, APP_NAME, f"تعذر إنشاء الملف: {e}")
+class NetworkPage(BasePage, LivePage):
+    def __init__(self, parent=None):
+        BasePage.__init__(self, "مراقب الشبكة", "سرعة التنزيل/الرفع اللحظية، اختبار البينج، قياس سرعة الإنترنت، والأجهزة المتصلة.")
         self.last_counters = None
         self._build_ui()
-
     def _build_ui(self):
-        section_title(self, "مراقب الشبكة").pack(anchor="w", padx=20, pady=(20, 10))
-        speed_frame = tk.Frame(self, bg=BG_MAIN)
-        speed_frame.pack(fill="x", padx=20)
-        self.down_label = tk.Label(speed_frame, text="التنزيل: -- KB/s", bg=BG_MAIN, fg=FG_TEXT, font=("Segoe UI", 12))
-        self.down_label.pack(side="left", padx=(0, 30))
-        self.up_label = tk.Label(speed_frame, text="الرفع: -- KB/s", bg=BG_MAIN, fg=FG_TEXT, font=("Segoe UI", 12))
-        self.up_label.pack(side="left")
-        ping_frame = tk.Frame(self, bg=BG_MAIN)
-        ping_frame.pack(fill="x", padx=20, pady=15)
-        ttk.Button(ping_frame, text="اختبار البينج (Ping)", command=self.run_ping).pack(side="left")
-        self.ping_label = tk.Label(ping_frame, text="", bg=BG_MAIN, fg=FG_TEXT)
-        self.ping_label.pack(side="left", padx=15)
-        speedtest_frame = tk.Frame(self, bg=BG_MAIN)
-        speedtest_frame.pack(fill="x", padx=20, pady=(0, 10))
-        ttk.Button(speedtest_frame, text="قياس سرعة الإنترنت", command=self.run_speedtest).pack(side="left")
-        self.speedtest_status = tk.Label(speedtest_frame, text="", bg=BG_MAIN, fg=FG_TEXT)
-        self.speedtest_status.pack(side="left", padx=15)
-        result_frame = tk.Frame(self, bg=BG_MAIN)
-        result_frame.pack(fill="x", padx=20, pady=(0, 10))
-        self.download_mbps_label = tk.Label(result_frame, text="التنزيل: -- Mbps", bg=BG_MAIN, fg=ACCENT,
-                                             font=("Segoe UI", 12, "bold"))
-        self.download_mbps_label.pack(side="left", padx=(0, 30))
-        self.upload_mbps_label = tk.Label(result_frame, text="الرفع: -- Mbps", bg=BG_MAIN, fg=ACCENT2,
-                                           font=("Segoe UI", 12, "bold"))
-        self.upload_mbps_label.pack(side="left")
-        tk.Label(self, text="الأجهزة المتصلة بالشبكة", bg=BG_MAIN, fg=FG_TEXT, font=("Segoe UI", 11, "bold")).pack(
-            anchor="w", padx=20, pady=(10, 5))
-        ttk.Button(self, text="فحص الأجهزة المتصلة", command=self.scan_devices).pack(anchor="w", padx=20)
-        wrapper, self.tree = make_treeview(self, ("ip", "mac", "type"), ("عنوان IP", "MAC Address", "النوع"),
-                                            (180, 200, 120))
-        wrapper.pack(fill="both", expand=True, padx=20, pady=15)
-
+        stats_row = QHBoxLayout()
+        stats_row.setSpacing(14)
+        self.down_card = StatCard("سرعة التنزيل الحالية", "-- KB/s", "accent")
+        self.up_card = StatCard("سرعة الرفع الحالية", "-- KB/s", "accent2")
+        for c in (self.down_card, self.up_card):
+            self.add_card(c)
+            stats_row.addWidget(c)
+        self.outer.addLayout(stats_row)
+        tools_card = self.add_card(Card(self))
+        tl = QVBoxLayout(tools_card)
+        tl.setContentsMargins(18, 16, 18, 16)
+        tl.setSpacing(10)
+        ping_row = QHBoxLayout()
+        self.ping_btn = QPushButton("📶  اختبار البينج (Ping)")
+        self.ping_btn.setCursor(Qt.PointingHandCursor)
+        self.ping_btn.clicked.connect(self.run_ping)
+        ping_row.addWidget(self.ping_btn)
+        self.ping_lbl = QLabel("")
+        ping_row.addWidget(self.ping_lbl)
+        ping_row.addStretch()
+        tl.addLayout(ping_row)
+        speed_row = QHBoxLayout()
+        self.speedtest_btn = QPushButton("🚀  قياس سرعة الإنترنت")
+        self.speedtest_btn.setCursor(Qt.PointingHandCursor)
+        self.speedtest_btn.clicked.connect(self.run_speedtest)
+        speed_row.addWidget(self.speedtest_btn)
+        self.speedtest_status_lbl = QLabel("")
+        speed_row.addWidget(self.speedtest_status_lbl)
+        speed_row.addStretch()
+        tl.addLayout(speed_row)
+        result_row = QHBoxLayout()
+        self.down_mbps_lbl = QLabel("التنزيل: -- Mbps")
+        self.up_mbps_lbl = QLabel("الرفع: -- Mbps")
+        result_row.addWidget(self.down_mbps_lbl)
+        result_row.addWidget(self.up_mbps_lbl)
+        result_row.addStretch()
+        tl.addLayout(result_row)
+        self.outer.addWidget(tools_card)
+        devices_card = self.add_card(Card(self))
+        dl = QVBoxLayout(devices_card)
+        dl.setContentsMargins(18, 16, 18, 16)
+        dl.setSpacing(10)
+        header_row = QHBoxLayout()
+        header_row.addWidget(QLabel("الأجهزة المتصلة بالشبكة"))
+        header_row.addStretch()
+        self.scan_devices_btn = QPushButton("فحص الأجهزة المتصلة")
+        self.scan_devices_btn.setCursor(Qt.PointingHandCursor)
+        self.scan_devices_btn.clicked.connect(self.scan_devices)
+        header_row.addWidget(self.scan_devices_btn)
+        dl.addLayout(header_row)
+        self.table = make_table(["عنوان IP", "MAC Address", "النوع"], [180, 220, 140])
+        dl.addWidget(self.table, 1)
+        self.outer.addWidget(devices_card, 1)
+        self.restyle()
+    def restyle(self):
+        super().restyle()
+        p = palette()
+        self.ping_btn.setStyleSheet(ghost_button_style())
+        self.speedtest_btn.setStyleSheet(accent_button_style(p["accent"], p["accent_hover"]))
+        self.scan_devices_btn.setStyleSheet(ghost_button_style())
+        self.down_mbps_lbl.setStyleSheet(f"color: {p['accent']}; font-weight: 700;")
+        self.up_mbps_lbl.setStyleSheet(f"color: {p['accent2']}; font-weight: 700;")
     def on_show(self):
-        self.active = True
         if psutil is None:
-            messagebox.showerror(APP_NAME, "المكتبة psutil غير مثبتة.\nنفّذ: pip install psutil")
+            QMessageBox.critical(self, APP_NAME, "المكتبة psutil غير مثبتة.\nنفّذ: pip install psutil")
             return
-        self._loop()
-
+        self.start_live(1000, self._collect, self._render)
     def on_hide(self):
-        self.active = False
-
-    def _loop(self):
-        if not self.active:
-            return
-        threading.Thread(target=self._update_once, daemon=True).start()
-        self.after(1000, self._loop)
-
-    def _update_once(self):
-        try:
-            counters = psutil.net_io_counters()
-            now = time.time()
-            if self.last_counters:
-                prev, prev_time = self.last_counters
-                elapsed = max(now - prev_time, 0.001)
-                down_speed = (counters.bytes_recv - prev.bytes_recv) / elapsed
-                up_speed = (counters.bytes_sent - prev.bytes_sent) / elapsed
-            else:
-                down_speed = 0
-                up_speed = 0
-            self.last_counters = (counters, now)
-        except Exception:
-            return
-        self.after(0, lambda: self._render(down_speed, up_speed))
-
-    def _render(self, down_speed, up_speed):
-        self.down_label.config(text=f"التنزيل: {human_size(down_speed)}/s")
-        self.up_label.config(text=f"الرفع: {human_size(up_speed)}/s")
-
+        self.stop_live()
+    def _collect(self):
+        counters = psutil.net_io_counters()
+        now = time.time()
+        if self.last_counters:
+            prev, prev_time = self.last_counters
+            elapsed = max(now - prev_time, 0.001)
+            down_speed = (counters.bytes_recv - prev.bytes_recv) / elapsed
+            up_speed = (counters.bytes_sent - prev.bytes_sent) / elapsed
+        else:
+            down_speed = 0
+            up_speed = 0
+        self.last_counters = (counters, now)
+        return down_speed, up_speed
+    def _render(self, result):
+        down_speed, up_speed = result
+        self.down_card.set_value(f"{human_size(down_speed)}/s")
+        self.up_card.set_value(f"{human_size(up_speed)}/s")
     def run_ping(self):
-        self.ping_label.config(text="جاري الاختبار...")
-        threading.Thread(target=self._ping_worker, daemon=True).start()
-
-    def _ping_worker(self):
-        result = ping_test()
-        self.after(0, lambda: self.ping_label.config(text=result))
-
+        self.ping_lbl.setText("جاري الاختبار...")
+        w = SimpleWorker(ping_test)
+        w.done.connect(lambda r: self.ping_lbl.setText(r))
+        keep_ref(self, w)
+        w.start()
     def run_speedtest(self):
-        self.speedtest_status.config(text="جاري قياس السرعة، الرجاء الانتظار...")
-        self.download_mbps_label.config(text="التنزيل: -- Mbps")
-        self.upload_mbps_label.config(text="الرفع: -- Mbps")
-        threading.Thread(target=self._speedtest_worker, daemon=True).start()
-
-    def _speedtest_worker(self):
-        down = speedtest_download()
-        self.after(0, lambda: self.download_mbps_label.config(
-            text=f"التنزيل: {down:.1f} Mbps" if down is not None else "التنزيل: تعذر القياس"))
-        up = speedtest_upload()
-        self.after(0, lambda: self.upload_mbps_label.config(
-            text=f"الرفع: {up:.1f} Mbps" if up is not None else "الرفع: تعذر القياس"))
-        self.after(0, lambda: self.speedtest_status.config(text="اكتمل قياس السرعة."))
-
+        self.speedtest_status_lbl.setText("جاري قياس السرعة، الرجاء الانتظار...")
+        self.down_mbps_lbl.setText("التنزيل: -- Mbps")
+        self.up_mbps_lbl.setText("الرفع: -- Mbps")
+        def work():
+            down = speedtest_download()
+            up = speedtest_upload()
+            return down, up
+        w = SimpleWorker(work)
+        w.done.connect(self._on_speedtest_done)
+        keep_ref(self, w)
+        w.start()
+    def _on_speedtest_done(self, result):
+        down, up = result
+        self.down_mbps_lbl.setText(f"التنزيل: {down:.1f} Mbps" if down is not None else "التنزيل: تعذر القياس")
+        self.up_mbps_lbl.setText(f"الرفع: {up:.1f} Mbps" if up is not None else "الرفع: تعذر القياس")
+        self.speedtest_status_lbl.setText("اكتمل قياس السرعة.")
     def scan_devices(self):
-        for row in self.tree.get_children():
-            self.tree.delete(row)
-        threading.Thread(target=self._devices_worker, daemon=True).start()
-
-    def _devices_worker(self):
-        devices = get_arp_devices()
-        self.after(0, lambda: self._populate_devices(devices))
-
+        self.table.setRowCount(0)
+        w = SimpleWorker(get_arp_devices)
+        w.done.connect(self._populate_devices)
+        keep_ref(self, w)
+        w.start()
     def _populate_devices(self, devices):
-        for ip, mac, kind in devices:
-            self.tree.insert("", "end", values=(ip, mac, kind))
-
-
-class BoosterFrame(tk.Frame):
-    def __init__(self, parent, controller):
-        super().__init__(parent, bg=BG_MAIN)
-        self.controller = controller
-        self.selected_var = tk.StringVar(value="")
-        self.search_var = tk.StringVar(value="")
+        self.table.setRowCount(len(devices))
+        for i, (ip, mac, kind) in enumerate(devices):
+            self.table.setItem(i, 0, QTableWidgetItem(ip))
+            self.table.setItem(i, 1, QTableWidgetItem(mac))
+            self.table.setItem(i, 2, QTableWidgetItem(kind))
+class BoosterPage(BasePage):
+    def __init__(self, parent=None):
+        super().__init__("معزز أداء المعالج والذاكرة", "يرفع أولوية برنامج محدد (مثل لعبة) ويخفض أولوية باقي البرامج غير الأساسية.")
         self.pid_map = {}
         self.all_values = []
         self._build_ui()
-
     def _build_ui(self):
-        section_title(self, "معزز أداء المعالج والذاكرة").pack(anchor="w", padx=20, pady=(20, 10))
-        tk.Label(self, text="يرفع أولوية البرنامج المحدد (مثل لعبة) ويخفض أولوية باقي البرامج غير الأساسية لتحسين الأداء.",
-                 bg=BG_MAIN, fg=FG_TEXT, font=("Segoe UI", 9)).pack(anchor="w", padx=20)
-        search_row = tk.Frame(self, bg=BG_MAIN)
-        search_row.pack(fill="x", padx=20, pady=(15, 5))
-        tk.Label(search_row, text="ابحث عن التطبيق:", bg=BG_MAIN, fg=FG_TEXT).pack(side="left")
-        self.search_entry = ttk.Entry(search_row, textvariable=self.search_var, width=40)
-        self.search_entry.pack(side="left", padx=8)
-        self.search_entry.bind("<KeyRelease>", self._on_search)
-        row = tk.Frame(self, bg=BG_MAIN)
-        row.pack(fill="x", padx=20, pady=10)
-        tk.Label(row, text="اختر البرنامج:", bg=BG_MAIN, fg=FG_TEXT).pack(side="left")
-        self.combo = ttk.Combobox(row, textvariable=self.selected_var, state="readonly", width=45)
-        self.combo.pack(side="left", padx=8)
-        ttk.Button(row, text="تحديث القائمة", command=self.refresh_list).pack(side="left", padx=8)
-        actions = tk.Frame(self, bg=BG_MAIN)
-        actions.pack(fill="x", padx=20)
-        ttk.Button(actions, text="⚡ تفعيل التعزيز", command=self.boost).pack(side="left")
-        ttk.Button(actions, text="استعادة الأولوية الطبيعية للجميع", command=self.restore).pack(side="left", padx=8)
-        self.status_label = tk.Label(self, text="", bg=BG_MAIN, fg=FG_TEXT, font=("Segoe UI", 9))
-        self.status_label.pack(anchor="w", padx=20, pady=15)
-
+        card = self.add_card(Card(self))
+        cl = QVBoxLayout(card)
+        cl.setContentsMargins(18, 16, 18, 16)
+        cl.setSpacing(12)
+        search_row = QHBoxLayout()
+        search_row.addWidget(QLabel("ابحث عن التطبيق:"))
+        self.search_edit = QLineEdit()
+        self.search_edit.textChanged.connect(self._on_search)
+        search_row.addWidget(self.search_edit, 1)
+        cl.addLayout(search_row)
+        choose_row = QHBoxLayout()
+        choose_row.addWidget(QLabel("اختر البرنامج:"))
+        self.combo = QComboBox()
+        self.combo.setMinimumWidth(340)
+        choose_row.addWidget(self.combo, 1)
+        self.refresh_btn = QPushButton("🔄  تحديث القائمة")
+        self.refresh_btn.setCursor(Qt.PointingHandCursor)
+        self.refresh_btn.clicked.connect(self.refresh_list)
+        choose_row.addWidget(self.refresh_btn)
+        cl.addLayout(choose_row)
+        actions_row = QHBoxLayout()
+        self.boost_btn = QPushButton("⚡  تفعيل التعزيز")
+        self.boost_btn.setCursor(Qt.PointingHandCursor)
+        self.boost_btn.clicked.connect(self.boost)
+        self.restore_btn = QPushButton("استعادة الأولوية الطبيعية للجميع")
+        self.restore_btn.setCursor(Qt.PointingHandCursor)
+        self.restore_btn.clicked.connect(self.restore)
+        actions_row.addWidget(self.boost_btn)
+        actions_row.addWidget(self.restore_btn)
+        actions_row.addStretch()
+        cl.addLayout(actions_row)
+        self.status_lbl = QLabel("")
+        cl.addWidget(self.status_lbl)
+        self.outer.addWidget(card)
+        self.outer.addStretch()
+        self.restyle()
+    def restyle(self):
+        super().restyle()
+        p = palette()
+        self.boost_btn.setStyleSheet(accent_button_style(p["accent"], p["accent_hover"]))
+        self.refresh_btn.setStyleSheet(ghost_button_style())
+        self.restore_btn.setStyleSheet(ghost_button_style())
+        self.status_lbl.setStyleSheet(f"color: {p['text_dim']}; font-size: 12px;")
     def on_show(self):
         self.refresh_list()
-
-    def on_hide(self):
-        pass
-
     def refresh_list(self):
         if psutil is None:
-            messagebox.showerror(APP_NAME, "المكتبة psutil غير مثبتة.\nنفّذ: pip install psutil")
+            QMessageBox.critical(self, APP_NAME, "المكتبة psutil غير مثبتة.\nنفّذ: pip install psutil")
             return
-        self.pid_map = {}
-        display_values = []
-        for p in psutil.process_iter(["pid", "name"]):
-            try:
-                name = p.info["name"] or "?"
-                if name.lower() in CRITICAL_PROCESSES:
+        def work():
+            pid_map = {}
+            values = []
+            for p in psutil.process_iter(["pid", "name"]):
+                try:
+                    name = p.info["name"] or "?"
+                    if name.lower() in CRITICAL_PROCESSES:
+                        continue
+                    label = f"{name} (PID {p.info['pid']})"
+                    pid_map[label] = p.info["pid"]
+                    values.append(label)
+                except Exception:
                     continue
-                label = f"{name} (PID {p.info['pid']})"
-                self.pid_map[label] = p.info["pid"]
-                display_values.append(label)
-            except Exception:
-                continue
-        display_values.sort()
-        self.all_values = display_values
+            values.sort()
+            return pid_map, values
+        w = SimpleWorker(work)
+        w.done.connect(self._on_list_ready)
+        keep_ref(self, w)
+        w.start()
+    def _on_list_ready(self, result):
+        self.pid_map, self.all_values = result
         self._on_search()
-
-    def _on_search(self, event=None):
-        query = self.search_var.get().strip().lower()
-        if not query:
-            filtered = self.all_values
-        else:
-            filtered = [v for v in self.all_values if query in v.lower()]
-        self.combo["values"] = filtered
-        if self.selected_var.get() not in filtered:
-            self.selected_var.set(filtered[0] if filtered else "")
-
+    def _on_search(self):
+        query = self.search_edit.text().strip().lower()
+        filtered = [v for v in self.all_values if query in v.lower()] if query else self.all_values
+        current = self.combo.currentText()
+        self.combo.blockSignals(True)
+        self.combo.clear()
+        self.combo.addItems(filtered)
+        if current in filtered:
+            self.combo.setCurrentText(current)
+        self.combo.blockSignals(False)
     def boost(self):
-        label = self.selected_var.get()
+        label = self.combo.currentText()
         if not label or label not in self.pid_map:
-            messagebox.showinfo(APP_NAME, "اختر برنامجاً من القائمة أولاً.")
+            QMessageBox.information(self, APP_NAME, "اختر برنامجاً من القائمة أولاً.")
             return
         pid = self.pid_map[label]
-        threading.Thread(target=self._boost_worker, args=(pid, label), daemon=True).start()
-
-    def _boost_worker(self, pid, label):
-        try:
-            target = psutil.Process(pid)
-            target.nice(psutil.HIGH_PRIORITY_CLASS)
+        def work():
             try:
-                target.io_priority(psutil.IOPRIO_HIGH)
-            except Exception:
-                pass
-        except Exception as e:
-            self.after(0, lambda: self.status_label.config(text=f"تعذر رفع أولوية البرنامج المستهدف: {e}"))
-            return
-        count = 0
-        for p in psutil.process_iter(["pid", "name"]):
-            try:
-                if p.info["pid"] == pid:
+                target = psutil.Process(pid)
+                target.nice(psutil.HIGH_PRIORITY_CLASS)
+                try:
+                    target.io_priority(psutil.IOPRIO_HIGH)
+                except Exception:
+                    pass
+            except Exception as e:
+                return f"تعذر رفع أولوية البرنامج المستهدف: {e}"
+            count = 0
+            for p in psutil.process_iter(["pid", "name"]):
+                try:
+                    if p.info["pid"] == pid:
+                        continue
+                    lname = (p.info["name"] or "").lower()
+                    if lname in CRITICAL_PROCESSES:
+                        continue
+                    proc = psutil.Process(p.info["pid"])
+                    proc.nice(psutil.BELOW_NORMAL_PRIORITY_CLASS)
+                    count += 1
+                except Exception:
                     continue
-                lname = (p.info["name"] or "").lower()
-                if lname in CRITICAL_PROCESSES:
-                    continue
-                proc = psutil.Process(p.info["pid"])
-                proc.nice(psutil.BELOW_NORMAL_PRIORITY_CLASS)
-                count += 1
-            except Exception:
-                continue
-        self.after(0, lambda: self.status_label.config(
-            text=f"تم رفع أولوية {label} وخفض أولوية {count} عملية أخرى."))
-
+            return f"تم رفع أولوية {label} وخفض أولوية {count} عملية أخرى."
+        w = SimpleWorker(work)
+        w.done.connect(self.status_lbl.setText)
+        keep_ref(self, w)
+        w.start()
     def restore(self):
-        threading.Thread(target=self._restore_worker, daemon=True).start()
-
-    def _restore_worker(self):
-        count = 0
-        for p in psutil.process_iter(["pid", "name"]):
-            try:
-                lname = (p.info["name"] or "").lower()
-                if lname in CRITICAL_PROCESSES:
+        def work():
+            count = 0
+            for p in psutil.process_iter(["pid", "name"]):
+                try:
+                    lname = (p.info["name"] or "").lower()
+                    if lname in CRITICAL_PROCESSES:
+                        continue
+                    proc = psutil.Process(p.info["pid"])
+                    proc.nice(psutil.NORMAL_PRIORITY_CLASS)
+                    count += 1
+                except Exception:
                     continue
-                proc = psutil.Process(p.info["pid"])
-                proc.nice(psutil.NORMAL_PRIORITY_CLASS)
-                count += 1
-            except Exception:
-                continue
-        self.after(0, lambda: self.status_label.config(text=f"تمت استعادة الأولوية الطبيعية لـ {count} عملية."))
-
-
-class BoostFrame(tk.Frame):
-    def __init__(self, parent, controller):
-        super().__init__(parent, bg=BG_MAIN)
-        self.controller = controller
-        self.vars = {}
-        self.log_lines = []
+            return f"تمت استعادة الأولوية الطبيعية لـ {count} عملية."
+        w = SimpleWorker(work)
+        w.done.connect(self.status_lbl.setText)
+        keep_ref(self, w)
+        w.start()
+class BoostPage(BasePage):
+    def __init__(self, parent=None):
+        super().__init__("تعزيز FPS والأداء الشامل",
+                          "يعطّل خدمات ومزايا ويندوز غير الضرورية للألعاب، ويضبط الشبكة وخطة الطاقة لتقليل زمن الاستجابة.\n"
+                          "لا يتم لمس أي إعداد أمني مثل Windows Defender أو الجدار الناري أو التحديثات الأمنية.")
+        self.checks = {}
         self._build_ui()
-
+    def _add_group(self, layout, title):
+        lbl = QLabel(title)
+        lbl.setObjectName("groupTitle")
+        layout.addWidget(lbl)
+        return lbl
     def _build_ui(self):
-        section_title(self, "تعزيز FPS والأداء الشامل").pack(anchor="w", padx=20, pady=(20, 10))
-        tk.Label(self,
-                 text="يعطّل هذا الخيار خدمات ومزايا Windows غير الضرورية للألعاب (تيليمتري، فهرسة، تسجيل الألعاب،\n"
-                      "تطبيقات الخلفية، إشعارات) ويضبط الشبكة وخطة الطاقة لتقليل زمن الاستجابة. لا يتم لمس أي\n"
-                      "إعداد أمني مثل Windows Defender أو الجدار الناري أو التحديثات الأمنية.",
-                 bg=BG_MAIN, fg=FG_TEXT, font=("Segoe UI", 9), justify="right").pack(anchor="w", padx=20)
-
-        scroll_wrapper = tk.Frame(self, bg=BG_MAIN)
-        scroll_wrapper.pack(fill="both", expand=True, padx=20, pady=(15, 5))
-        canvas = tk.Canvas(scroll_wrapper, bg=BG_MAIN, highlightthickness=0, height=280)
-        vsb = ttk.Scrollbar(scroll_wrapper, orient="vertical", command=canvas.yview)
-        options_frame = tk.Frame(canvas, bg=BG_MAIN)
-        options_frame.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
-        canvas.create_window((0, 0), window=options_frame, anchor="nw")
-        canvas.configure(yscrollcommand=vsb.set)
-        canvas.pack(side="left", fill="both", expand=True)
-        vsb.pack(side="right", fill="y")
-
-        tk.Label(options_frame, text="خدمات Microsoft غير الضرورية", bg=BG_MAIN, fg=ACCENT2,
-                 font=("Segoe UI", 10, "bold")).pack(anchor="w", pady=(5, 3))
+        options_card = self.add_card(Card(self))
+        ol = QVBoxLayout(options_card)
+        ol.setContentsMargins(18, 16, 18, 10)
+        ol.setSpacing(8)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setFixedHeight(300)
+        inner = QWidget()
+        inner_lay = QVBoxLayout(inner)
+        inner_lay.setSpacing(6)
+        self.group_labels = []
+        self.group_labels.append(self._add_group(inner_lay, "خدمات Microsoft غير الضرورية"))
         for svc_name, desc in TWEAK_SERVICES.items():
-            var = tk.BooleanVar(value=True)
-            self.vars[svc_name] = var
-            ttk.Checkbutton(options_frame, text=f"{desc} ({svc_name})", variable=var).pack(anchor="w", padx=5, pady=2)
-
-        tk.Label(options_frame, text="مزايا وواجهة النظام", bg=BG_MAIN, fg=ACCENT2,
-                 font=("Segoe UI", 10, "bold")).pack(anchor="w", pady=(12, 3))
+            cb = QCheckBox(f"{desc} ({svc_name})")
+            cb.setChecked(True)
+            self.checks[svc_name] = cb
+            inner_lay.addWidget(cb)
+        self.group_labels.append(self._add_group(inner_lay, "مزايا وواجهة النظام"))
         for tw in REGISTRY_TWEAKS:
-            var = tk.BooleanVar(value=True)
-            self.vars[tw["id"]] = var
-            ttk.Checkbutton(options_frame, text=tw["label"], variable=var).pack(anchor="w", padx=5, pady=2)
-
-        tk.Label(options_frame, text="الشبكة وخطة الطاقة", bg=BG_MAIN, fg=ACCENT2,
-                 font=("Segoe UI", 10, "bold")).pack(anchor="w", pady=(12, 3))
+            cb = QCheckBox(tw["label"])
+            cb.setChecked(True)
+            self.checks[tw["id"]] = cb
+            inner_lay.addWidget(cb)
+        self.group_labels.append(self._add_group(inner_lay, "الشبكة وخطة الطاقة"))
         for opt_id, opt_label in BOOST_EXTRA_OPTIONS:
-            var = tk.BooleanVar(value=True)
-            self.vars[opt_id] = var
-            ttk.Checkbutton(options_frame, text=opt_label, variable=var).pack(anchor="w", padx=5, pady=2)
-
-        actions = tk.Frame(self, bg=BG_MAIN)
-        actions.pack(fill="x", padx=20, pady=15)
-        ttk.Button(actions, text="⚡ تفعيل تعزيز FPS", command=self.apply).pack(side="left")
-        ttk.Button(actions, text="استعادة الإعدادات الأصلية", command=self.restore).pack(side="left", padx=8)
-        ttk.Button(actions, text="تحديد الكل", command=lambda: self._set_all(True)).pack(side="left", padx=8)
-        ttk.Button(actions, text="إلغاء تحديد الكل", command=lambda: self._set_all(False)).pack(side="left", padx=8)
-
-        self.log_box = scrolledtext.ScrolledText(self, height=8, bg=BG_PANEL, fg=FG_TEXT,
-                                                   font=("Consolas", 9), state="disabled")
-        self.log_box.pack(fill="both", expand=False, padx=20, pady=(0, 20))
-
-    def on_show(self):
-        pass
-
-    def on_hide(self):
-        pass
-
+            cb = QCheckBox(opt_label)
+            cb.setChecked(True)
+            self.checks[opt_id] = cb
+            inner_lay.addWidget(cb)
+        inner_lay.addStretch()
+        scroll.setWidget(inner)
+        ol.addWidget(scroll)
+        actions_row = QHBoxLayout()
+        self.apply_btn = QPushButton("⚡  تفعيل تعزيز FPS")
+        self.apply_btn.setCursor(Qt.PointingHandCursor)
+        self.apply_btn.clicked.connect(self.apply)
+        self.restore_btn = QPushButton("استعادة الإعدادات الأصلية")
+        self.restore_btn.setCursor(Qt.PointingHandCursor)
+        self.restore_btn.clicked.connect(self.restore)
+        self.select_all_btn = QPushButton("تحديد الكل")
+        self.select_all_btn.setCursor(Qt.PointingHandCursor)
+        self.select_all_btn.clicked.connect(lambda: self._set_all(True))
+        self.deselect_all_btn = QPushButton("إلغاء تحديد الكل")
+        self.deselect_all_btn.setCursor(Qt.PointingHandCursor)
+        self.deselect_all_btn.clicked.connect(lambda: self._set_all(False))
+        for b in (self.apply_btn, self.restore_btn, self.select_all_btn, self.deselect_all_btn):
+            actions_row.addWidget(b)
+        actions_row.addStretch()
+        ol.addLayout(actions_row)
+        log_card = self.add_card(Card(self))
+        ll = QVBoxLayout(log_card)
+        ll.setContentsMargins(18, 14, 18, 14)
+        ll.addWidget(QLabel("السجل"))
+        self.log_console = LogConsole()
+        self.log_console.setFixedHeight(140)
+        ll.addWidget(self.log_console)
+        self.outer.addWidget(options_card, 1)
+        self.outer.addWidget(log_card)
+        self.restyle()
+    def restyle(self):
+        super().restyle()
+        p = palette()
+        self.apply_btn.setStyleSheet(accent_button_style(p["accent"], p["accent_hover"]))
+        self.restore_btn.setStyleSheet(ghost_button_style())
+        self.select_all_btn.setStyleSheet(ghost_button_style())
+        self.deselect_all_btn.setStyleSheet(ghost_button_style())
+        for lbl in self.group_labels:
+            lbl.setStyleSheet(f"color: {p['accent2']}; font-size: 12.5px; font-weight: 700; margin-top: 6px;")
     def _set_all(self, value):
-        for var in self.vars.values():
-            var.set(value)
-
-    def _log(self, message):
-        def _write():
-            self.log_box.configure(state="normal")
-            self.log_box.insert("end", message + "\n")
-            self.log_box.see("end")
-            self.log_box.configure(state="disabled")
-        self.after(0, _write)
-
+        for cb in self.checks.values():
+            cb.setChecked(value)
     def apply(self):
-        if not messagebox.askyesno(
-                APP_NAME,
+        if QMessageBox.question(
+                self, APP_NAME,
                 "سيتم تطبيق تعديلات على خدمات وإعدادات النظام لتحسين الأداء أثناء الألعاب.\n"
-                "لا يشمل ذلك أي إعداد أمني، ويمكنك التراجع في أي وقت من زر الاستعادة.\nهل تريد المتابعة؟"):
+                "لا يشمل ذلك أي إعداد أمني، ويمكنك التراجع في أي وقت من زر الاستعادة.\nهل تريد المتابعة؟"
+        ) != QMessageBox.Yes:
             return
-        selected_ids = [key for key, var in self.vars.items() if var.get()]
-        threading.Thread(target=self._apply_worker, args=(selected_ids,), daemon=True).start()
-
-    def _apply_worker(self, selected_ids):
-        self._log("جاري تفعيل تعزيز FPS...")
-        try:
-            apply_boost(selected_ids, self._log)
-        except Exception as e:
-            self._log(f"حدث خطأ أثناء التفعيل: {e}")
-
+        selected_ids = [key for key, cb in self.checks.items() if cb.isChecked()]
+        def work(log_fn, progress_fn):
+            log_fn("جاري تفعيل تعزيز FPS...")
+            apply_boost(selected_ids, log_fn)
+        w = Worker(work)
+        w.log.connect(self.log_console.log)
+        keep_ref(self, w)
+        w.start()
     def restore(self):
-        if not messagebox.askyesno(APP_NAME, "سيتم استعادة كل الإعدادات إلى وضعها الأصلي قبل التعزيز. هل تريد المتابعة؟"):
+        if QMessageBox.question(self, APP_NAME, "سيتم استعادة كل الإعدادات إلى وضعها الأصلي قبل التعزيز. هل تريد المتابعة؟") != QMessageBox.Yes:
             return
-        threading.Thread(target=self._restore_worker, daemon=True).start()
-
-    def _restore_worker(self):
-        self._log("جاري استعادة الإعدادات الأصلية...")
-        try:
-            restore_boost(self._log)
-        except Exception as e:
-            self._log(f"حدث خطأ أثناء الاستعادة: {e}")
-
-
-class VideoDownloaderFrame(tk.Frame):
-    def __init__(self, parent, controller):
-        super().__init__(parent, bg=BG_MAIN)
-        self.controller = controller
+        def work(log_fn, progress_fn):
+            log_fn("جاري استعادة الإعدادات الأصلية...")
+            restore_boost(log_fn)
+        w = Worker(work)
+        w.log.connect(self.log_console.log)
+        keep_ref(self, w)
+        w.start()
+class DownloaderPage(BasePage):
+    def __init__(self, parent=None):
+        super().__init__("تحميل الفيديوهات", "يدعم يوتيوب وتيك توك وإنستقرام وأي منصة أخرى مدعومة من مكتبة yt-dlp.")
         self.formats_data = []
         self.output_dir = os.path.join(get_user_profile(), "Downloads")
         self._build_ui()
-
     def _build_ui(self):
-        section_title(self, "تحميل الفيديوهات").pack(anchor="w", padx=20, pady=(20, 10))
-        tk.Label(self, text="يدعم يوتيوب وتيك توك وإنستقرام وأي منصة أخرى مدعومة من مكتبة yt-dlp.",
-                 bg=BG_MAIN, fg=FG_TEXT, font=("Segoe UI", 9)).pack(anchor="w", padx=20)
-
-        url_row = tk.Frame(self, bg=BG_MAIN)
-        url_row.pack(fill="x", padx=20, pady=(15, 5))
-        tk.Label(url_row, text="رابط الفيديو:", bg=BG_MAIN, fg=FG_TEXT).pack(side="left")
-        self.url_var = tk.StringVar()
-        ttk.Entry(url_row, textvariable=self.url_var, width=55).pack(side="left", padx=8)
-        ttk.Button(url_row, text="جلب الجودات المتاحة", command=self.fetch_formats).pack(side="left", padx=8)
-
-        wrapper, self.tree = make_treeview(
-            self, ("quality", "ext", "size", "kind", "fps"),
-            ("الجودة", "الامتداد", "الحجم التقريبي", "النوع", "FPS"), (110, 70, 130, 130, 60))
-        wrapper.pack(fill="both", expand=True, padx=20, pady=10)
-
-        out_row = tk.Frame(self, bg=BG_MAIN)
-        out_row.pack(fill="x", padx=20, pady=(0, 5))
-        tk.Label(out_row, text="مجلد الحفظ:", bg=BG_MAIN, fg=FG_TEXT).pack(side="left")
-        self.output_label = tk.Label(out_row, text=self.output_dir, bg=BG_MAIN, fg=ACCENT2, font=("Segoe UI", 9))
-        self.output_label.pack(side="left", padx=8)
-        ttk.Button(out_row, text="تغيير المجلد", command=self.choose_folder).pack(side="left", padx=8)
-
-        actions = tk.Frame(self, bg=BG_MAIN)
-        actions.pack(fill="x", padx=20, pady=10)
-        ttk.Button(actions, text="⬇️ تحميل بالجودة المحددة", command=self.download_selected).pack(side="left")
-
-        self.progress = ttk.Progressbar(self, orient="horizontal", mode="determinate")
-        self.progress.pack(fill="x", padx=20, pady=(5, 5))
-        self.status_label = tk.Label(self, text="", bg=BG_MAIN, fg=FG_TEXT, font=("Segoe UI", 9))
-        self.status_label.pack(anchor="w", padx=20, pady=(0, 15))
-
+        url_card = self.add_card(Card(self))
+        ul = QVBoxLayout(url_card)
+        ul.setContentsMargins(18, 16, 18, 16)
+        ul.setSpacing(10)
+        url_row = QHBoxLayout()
+        url_row.addWidget(QLabel("رابط الفيديو:"))
+        self.url_edit = QLineEdit()
+        url_row.addWidget(self.url_edit, 1)
+        self.fetch_btn = QPushButton("🔎  جلب الجودات المتاحة")
+        self.fetch_btn.setCursor(Qt.PointingHandCursor)
+        self.fetch_btn.clicked.connect(self.fetch_formats)
+        url_row.addWidget(self.fetch_btn)
+        ul.addLayout(url_row)
+        table_card = self.add_card(Card(self))
+        tl = QVBoxLayout(table_card)
+        tl.setContentsMargins(18, 16, 18, 16)
+        self.table = make_table(["الجودة", "الامتداد", "الحجم التقريبي", "النوع", "FPS"], [100, 70, 130, 170, 60])
+        tl.addWidget(self.table, 1)
+        out_card = self.add_card(Card(self))
+        ol = QVBoxLayout(out_card)
+        ol.setContentsMargins(18, 14, 18, 14)
+        ol.setSpacing(8)
+        out_row = QHBoxLayout()
+        out_row.addWidget(QLabel("مجلد الحفظ:"))
+        self.output_lbl = QLabel(self.output_dir)
+        out_row.addWidget(self.output_lbl, 1)
+        self.folder_btn = QPushButton("تغيير المجلد")
+        self.folder_btn.setCursor(Qt.PointingHandCursor)
+        self.folder_btn.clicked.connect(self.choose_folder)
+        out_row.addWidget(self.folder_btn)
+        ol.addLayout(out_row)
+        actions_row = QHBoxLayout()
+        self.download_btn = QPushButton("⬇️  تحميل بالجودة المحددة")
+        self.download_btn.setCursor(Qt.PointingHandCursor)
+        self.download_btn.clicked.connect(self.download_selected)
+        actions_row.addWidget(self.download_btn)
+        actions_row.addStretch()
+        ol.addLayout(actions_row)
+        self.progress = QProgressBar()
+        ol.addWidget(self.progress)
+        self.status_lbl = QLabel("")
+        ol.addWidget(self.status_lbl)
+        ffmpeg_row = QHBoxLayout()
+        self.ffmpeg_btn = QPushButton("⬇️  تحميل ffmpeg")
+        self.ffmpeg_btn.setCursor(Qt.PointingHandCursor)
+        self.ffmpeg_btn.clicked.connect(self.download_ffmpeg)
+        ffmpeg_row.addWidget(self.ffmpeg_btn)
+        self.ffmpeg_status_lbl = QLabel("")
+        ffmpeg_row.addWidget(self.ffmpeg_status_lbl)
+        ffmpeg_row.addStretch()
+        ol.addLayout(ffmpeg_row)
+        self.outer.addWidget(url_card)
+        self.outer.addWidget(table_card, 1)
+        self.outer.addWidget(out_card)
+        self.restyle()
+        self._refresh_ffmpeg_status()
+    def restyle(self):
+        super().restyle()
+        p = palette()
+        self.fetch_btn.setStyleSheet(accent_button_style(p["accent"], p["accent_hover"]))
+        self.folder_btn.setStyleSheet(ghost_button_style())
+        self.download_btn.setStyleSheet(accent_button_style(p["accent2"], p["accent2_hover"]))
+        self.ffmpeg_btn.setStyleSheet(ghost_button_style())
+        self.status_lbl.setStyleSheet(f"color: {p['text_dim']}; font-size: 11.5px;")
+        self.output_lbl.setStyleSheet(f"color: {p['accent2']}; font-size: 11.5px;")
+    def _refresh_ffmpeg_status(self):
+        p = palette()
+        if ffmpeg_ready():
+            self.ffmpeg_status_lbl.setText("ffmpeg: متوفر ✅")
+            self.ffmpeg_status_lbl.setStyleSheet(f"color: {p['accent2']};")
+        else:
+            self.ffmpeg_status_lbl.setText("ffmpeg: غير مثبت")
+            self.ffmpeg_status_lbl.setStyleSheet(f"color: {p['text_dim']};")
     def on_show(self):
-        pass
-
-    def on_hide(self):
-        pass
-
-    FIXED_QUALITIES = [1080, 720, 480, 360]
-
+        self._refresh_ffmpeg_status()
     def fetch_formats(self):
-        url = self.url_var.get().strip()
+        url = self.url_edit.text().strip()
         if not url:
-            messagebox.showinfo(APP_NAME, "أدخل رابط الفيديو أولاً.")
+            QMessageBox.information(self, APP_NAME, "أدخل رابط الفيديو أولاً.")
             return
         if yt_dlp is None:
-            messagebox.showerror(APP_NAME, "المكتبة yt-dlp غير مثبتة.\nنفّذ: pip install yt-dlp")
+            QMessageBox.critical(self, APP_NAME, "المكتبة yt-dlp غير مثبتة.\nنفّذ: pip install yt-dlp")
             return
-        for row in self.tree.get_children():
-            self.tree.delete(row)
-        rows = [{
-            "format_id": None,
-            "ext": "mp4",
-            "quality": f"{h}p",
-            "height": h,
-            "size": "يعتمد على الفيديو",
-            "kind": "فيديو+صوت",
-            "fps": "",
-        } for h in self.FIXED_QUALITIES]
+        self.table.setRowCount(0)
+        self.formats_data = []
+        self.status_lbl.setText("جاري جلب المعلومات...")
+        def work():
+            opts = {"quiet": True, "skip_download": True, "noplaylist": True}
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                info = ydl.extract_info(url, download=False)
+            rows = []
+            seen = set()
+            for f in info.get("formats", []):
+                if f.get("vcodec") != "none" and f.get("height"):
+                    acodec = f.get("acodec")
+                    key = (f["height"], f.get("fps"), acodec != "none")
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    size = f.get("filesize") or f.get("filesize_approx")
+                    rows.append({
+                        "format_id": f["format_id"], "ext": f.get("ext"),
+                        "quality": f"{f['height']}p", "height": f["height"],
+                        "size": human_size(size) if size else "غير معروف",
+                        "kind": "فيديو+صوت" if acodec and acodec != "none" else "فيديو فقط (يحتاج ffmpeg)",
+                        "fps": f.get("fps") or "",
+                    })
+                elif f.get("vcodec") == "none" and f.get("acodec") != "none":
+                    size = f.get("filesize") or f.get("filesize_approx")
+                    rows.append({
+                        "format_id": f["format_id"], "ext": f.get("ext"),
+                        "quality": f"{f.get('abr') or '?'}kbps", "height": 0,
+                        "size": human_size(size) if size else "غير معروف",
+                        "kind": "صوت فقط", "fps": "",
+                    })
+            rows.sort(key=lambda r: (r["kind"] == "صوت فقط", r["kind"].startswith("فيديو فقط"), -r["height"]))
+            return rows, info.get("title", "")
+        w = SimpleWorker(work)
+        w.done.connect(lambda res: self._populate_formats(*res))
+        w.failed.connect(lambda err: self.status_lbl.setText(f"فشل جلب المعلومات: {err}"))
+        keep_ref(self, w)
+        w.start()
+    def _populate_formats(self, rows, title):
         self.formats_data = rows
-        for r in rows:
-            self.tree.insert("", "end", values=(r["quality"], r["ext"], r["size"], r["kind"], r["fps"]))
-        self.status_label.config(text="اختر الجودة المطلوبة ثم اضغط تحميل.")
-
+        if not rows:
+            self.status_lbl.setText("ما فيه جودات متاحة لهذا الفيديو.")
+            return
+        self.table.setRowCount(len(rows))
+        for i, r in enumerate(rows):
+            self.table.setItem(i, 0, QTableWidgetItem(r["quality"]))
+            self.table.setItem(i, 1, QTableWidgetItem(r["ext"]))
+            self.table.setItem(i, 2, QTableWidgetItem(r["size"]))
+            self.table.setItem(i, 3, QTableWidgetItem(r["kind"]))
+            self.table.setItem(i, 4, QTableWidgetItem(str(r["fps"])))
+        prefix = f"{title} — " if title else ""
+        self.status_lbl.setText(f"{prefix}اختر الجودة المطلوبة ثم اضغط تحميل.")
     def choose_folder(self):
-        d = filedialog.askdirectory()
+        d = QFileDialog.getExistingDirectory(self, "اختر مجلد الحفظ")
         if d:
             self.output_dir = d
-            self.output_label.config(text=d)
-
+            self.output_lbl.setText(d)
     def download_selected(self):
         if yt_dlp is None:
-            messagebox.showerror(APP_NAME, "المكتبة yt-dlp غير مثبتة.\nنفّذ: pip install yt-dlp")
+            QMessageBox.critical(self, APP_NAME, "المكتبة yt-dlp غير مثبتة.\nنفّذ: pip install yt-dlp")
             return
-        sel = self.tree.selection()
-        if not sel:
-            messagebox.showinfo(APP_NAME, "اختر جودة من القائمة أولاً.")
+        row = self.table.currentRow()
+        if row < 0:
+            QMessageBox.information(self, APP_NAME, "اختر جودة من القائمة أولاً.")
             return
-        url = self.url_var.get().strip()
+        url = self.url_edit.text().strip()
         if not url:
             return
-        idx = self.tree.index(sel[0])
-        fmt = self.formats_data[idx]
-        self.progress["value"] = 0
-        self.status_label.config(text="جاري التحميل...")
-        threading.Thread(target=self._download_worker, args=(url, fmt), daemon=True).start()
-
-    def _download_worker(self, url, fmt):
-        height = fmt["height"]
-        format_selector = f"bestvideo[height<={height}]+bestaudio/best[height<={height}]/best"
-        outtmpl = os.path.join(self.output_dir, "%(title)s.%(ext)s")
-
-        def hook(d):
-            if d.get("status") == "downloading":
-                total = d.get("total_bytes") or d.get("total_bytes_estimate")
-                downloaded = d.get("downloaded_bytes", 0)
-                if total:
-                    pct = downloaded / total * 100
-                    self.after(0, lambda: self.progress.config(value=pct))
-            elif d.get("status") == "finished":
-                self.after(0, lambda: self.progress.config(value=100))
-
-        opts = {
-            "format": format_selector,
-            "outtmpl": outtmpl,
-            "quiet": True,
-            "no_warnings": True,
-            "progress_hooks": [hook],
-            "merge_output_format": "mp4",
-        }
-        try:
+        fmt = self.formats_data[row]
+        needs_ffmpeg = fmt["kind"] != "فيديو+صوت"
+        if needs_ffmpeg and not ffmpeg_ready():
+            QMessageBox.critical(
+                self, APP_NAME,
+                "هذه الجودة تحتاج ffmpeg (فيديو وصوت بملفين منفصلين).\n"
+                "اضغط زر \"تحميل ffmpeg\" أسفل الصفحة، أو اختر جودة من نوع \"فيديو+صوت\"."
+            )
+            return
+        self.progress.setValue(0)
+        self.status_lbl.setText("جاري التحميل...")
+        def work():
+            format_id = fmt["format_id"]
+            kind = fmt["kind"]
+            is_audio = kind == "صوت فقط"
+            if kind == "فيديو+صوت" or is_audio:
+                format_selector = format_id
+            else:
+                format_selector = f"{format_id}+bestaudio/best"
+            outtmpl = os.path.join(self.output_dir, "%(title)s.%(ext)s")
+            def hook(d):
+                if d.get("status") == "downloading":
+                    total = d.get("total_bytes") or d.get("total_bytes_estimate")
+                    downloaded = d.get("downloaded_bytes", 0)
+                    if total:
+                        self._progress_signal_value = downloaded / total * 100
+            opts = {
+                "format": format_selector, "outtmpl": outtmpl, "quiet": True,
+                "no_warnings": True, "progress_hooks": [hook], "merge_output_format": "mp4",
+            }
+            ffmpeg_loc = ffmpeg_location_for_ytdlp()
+            if ffmpeg_loc:
+                opts["ffmpeg_location"] = ffmpeg_loc
+            if is_audio:
+                opts["postprocessors"] = [{"key": "FFmpegExtractAudio", "preferredcodec": "mp3", "preferredquality": "192"}]
             with yt_dlp.YoutubeDL(opts) as ydl:
                 ydl.download([url])
-            self.after(0, lambda: self.status_label.config(text=f"تم التحميل بنجاح إلى: {self.output_dir}"))
-        except Exception as e:
-            self.after(0, lambda: self.status_label.config(text=f"فشل التحميل: {e}"))
-
-
-class MainApp:
-    def __init__(self, root):
-        self.root = root
-        self.root.title(APP_NAME)
-        self.root.geometry("1250x750")
-        self.root.configure(bg=BG_MAIN)
-        self.current_key = None
-        self._build_style()
-        self._build_layout()
-
-    def _build_style(self):
-        style = ttk.Style()
-        style.theme_use("clam")
-        style.configure("TFrame", background=BG_MAIN)
-        style.configure("TLabel", background=BG_MAIN, foreground=FG_TEXT, font=("Segoe UI", 10))
-        style.configure("Header.TLabel", background=BG_MAIN, foreground=ACCENT, font=("Segoe UI", 14, "bold"))
-        style.configure("TButton", font=("Segoe UI", 10, "bold"), padding=6, background=ACCENT, foreground="#ffffff")
-        style.map("TButton", background=[("active", "#16a34a"), ("pressed", "#15803d")])
-        style.configure("TCheckbutton", background=BG_MAIN, foreground=FG_TEXT, font=("Segoe UI", 9))
-        style.configure("TCombobox", fieldbackground=BG_PANEL, background=BG_PANEL, foreground=FG_TEXT)
-        style.configure("Treeview", background=BG_PANEL, foreground=FG_TEXT, fieldbackground=BG_PANEL, rowheight=24)
-        style.configure("Treeview.Heading", background="#374151", foreground=FG_TEXT, font=("Segoe UI", 9, "bold"))
-        style.map("Treeview", background=[("selected", ACCENT2)], foreground=[("selected", BG_MAIN)])
-        style.configure("Horizontal.TProgressbar", troughcolor=BG_PANEL, background=ACCENT,
-                         bordercolor=BG_PANEL, lightcolor=ACCENT, darkcolor=ACCENT)
-
-    def _build_layout(self):
-        outer = tk.Frame(self.root, bg=BG_MAIN)
-        outer.pack(fill="both", expand=True)
-        sidebar = tk.Frame(outer, bg=BG_SIDEBAR, width=230)
-        sidebar.pack(side="left", fill="y")
-        sidebar.pack_propagate(False)
-        tk.Label(sidebar, text=APP_NAME, bg=BG_SIDEBAR, fg=ACCENT, font=("Segoe UI", 13, "bold")).pack(
-            pady=(20, 15), padx=15, anchor="w")
-        self.nav_buttons = {}
-        for key, label in NAV_ITEMS:
-            btn = tk.Button(sidebar, text=label, anchor="w", bg=BG_SIDEBAR, fg="#e5e7eb",
-                             activebackground=BG_PANEL, activeforeground="#ffffff",
-                             bd=0, font=("Segoe UI", 10), padx=15, pady=10, cursor="hand2",
-                             command=lambda k=key: self.show_frame(k))
-            btn.pack(fill="x")
-            self.nav_buttons[key] = btn
-        content = tk.Frame(outer, bg=BG_MAIN)
-        content.pack(side="left", fill="both", expand=True)
-        self.content = content
-        classes = {
-            "cleaner": CleanerFrame,
-            "dashboard": DashboardFrame,
-            "processes": ProcessFrame,
-            "startup": StartupFrame,
-            "explorer": ExplorerFrame,
-            "sysinfo": SysInfoFrame,
-            "network": NetworkFrame,
-            "booster": BoosterFrame,
-            "boost": BoostFrame,
-            "downloader": VideoDownloaderFrame,
+            return True
+        w = SimpleWorker(work)
+        w.done.connect(lambda ok: (self.progress.setValue(100), self.status_lbl.setText(f"تم التحميل بنجاح إلى: {self.output_dir}")))
+        w.failed.connect(lambda err: self.status_lbl.setText(f"فشل التحميل: {err}"))
+        keep_ref(self, w)
+        w.start()
+    def download_ffmpeg(self):
+        if ffmpeg_ready():
+            QMessageBox.information(self, APP_NAME, "ffmpeg موجود مسبقًا، ما فيه داعي للتحميل.")
+            self._refresh_ffmpeg_status()
+            return
+        self.ffmpeg_status_lbl.setText("جاري تحميل ffmpeg... 0%")
+        def work(log_fn, progress_fn):
+            os.makedirs(FFMPEG_DIR, exist_ok=True)
+            zip_path = os.path.join(FFMPEG_DIR, "ffmpeg_download.zip")
+            req = urllib.request.Request(FFMPEG_URL, headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req) as resp, open(zip_path, "wb") as out:
+                total = int(resp.headers.get("Content-Length", 0))
+                downloaded = 0
+                while True:
+                    chunk = resp.read(1024 * 256)
+                    if not chunk:
+                        break
+                    out.write(chunk)
+                    downloaded += len(chunk)
+                    if total:
+                        progress_fn(downloaded, total)
+            with zipfile.ZipFile(zip_path) as z:
+                for member in z.namelist():
+                    name = os.path.basename(member)
+                    if name in ("ffmpeg.exe", "ffprobe.exe"):
+                        with z.open(member) as src, open(os.path.join(FFMPEG_DIR, name), "wb") as dst:
+                            shutil.copyfileobj(src, dst)
+            os.remove(zip_path)
+            return local_ffmpeg_available()
+        w = Worker(work)
+        w.progress.connect(lambda cur, total: self.ffmpeg_status_lbl.setText(f"جاري تحميل ffmpeg... {cur / total * 100:.0f}%"))
+        w.done.connect(self._on_ffmpeg_downloaded)
+        w.failed.connect(lambda err: self.ffmpeg_status_lbl.setText(f"فشل تحميل ffmpeg: {err}"))
+        keep_ref(self, w)
+        w.start()
+    def _on_ffmpeg_downloaded(self, ok):
+        if ok:
+            p = palette()
+            self.ffmpeg_status_lbl.setText("ffmpeg: متوفر ✅")
+            self.ffmpeg_status_lbl.setStyleSheet(f"color: {p['accent2']};")
+            QMessageBox.information(self, APP_NAME, "تم تحميل ffmpeg بنجاح.")
+        else:
+            self.ffmpeg_status_lbl.setText("فشل استخراج ffmpeg من الأرشيف")
+class NavButton(QPushButton):
+    def __init__(self, icon, text, parent=None):
+        super().__init__(parent)
+        self.setText(f"  {icon}   {text}")
+        self.setCursor(Qt.PointingHandCursor)
+        self.setCheckable(True)
+        self.setFixedHeight(46)
+        self.setLayoutDirection(Qt.RightToLeft)
+        self.restyle()
+    def restyle(self):
+        p = palette()
+        if self.isChecked():
+            self.setStyleSheet(
+                f"QPushButton {{ text-align: right; border: none; border-radius: 10px; font-weight: 700;"
+                f" font-size: 13px; padding-right: 14px;"
+                f" background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 {p['accent']}, stop:1 {p['accent2']});"
+                f" color: #04120b; }}"
+            )
+        else:
+            self.setStyleSheet(
+                f"QPushButton {{ text-align: right; border: none; border-radius: 10px; font-size: 13px;"
+                f" padding-right: 14px; background: transparent; color: {p['text_dim']}; }}"
+                f"QPushButton:hover {{ background-color: {p['panel_alt']}; color: {p['text']}; }}"
+            )
+class Sidebar(QWidget):
+    nav_selected = Signal(str)
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedWidth(248)
+        self.buttons = {}
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(14, 22, 14, 18)
+        lay.setSpacing(4)
+        logo_row = QHBoxLayout()
+        logo_row.setSpacing(10)
+        self.logo_lbl = QLabel()
+        self.logo_lbl.setPixmap(make_icon(40).pixmap(40, 40))
+        logo_row.addWidget(self.logo_lbl)
+        title_col = QVBoxLayout()
+        title_col.setSpacing(0)
+        self.title_lbl = QLabel(APP_NAME)
+        self.title_lbl.setStyleSheet("font-size: 15px; font-weight: 800;")
+        self.subtitle_lbl = QLabel("Legendary Edition")
+        self.subtitle_lbl.setStyleSheet("font-size: 10px;")
+        title_col.addWidget(self.title_lbl)
+        title_col.addWidget(self.subtitle_lbl)
+        logo_row.addLayout(title_col)
+        logo_row.addStretch()
+        lay.addLayout(logo_row)
+        lay.addSpacing(18)
+        for key, label, icon in NAV_ITEMS:
+            btn = NavButton(icon, label)
+            btn.clicked.connect(lambda checked, k=key: self._on_click(k))
+            lay.addWidget(btn)
+            self.buttons[key] = btn
+        lay.addStretch()
+        self.admin_badge = QLabel()
+        self.admin_badge.setAlignment(Qt.AlignCenter)
+        self.admin_badge.setFixedHeight(30)
+        lay.addWidget(self.admin_badge)
+        self.set_active("cleaner")
+        self.restyle()
+    def _on_click(self, key):
+        self.set_active(key)
+        self.nav_selected.emit(key)
+    def set_active(self, key):
+        for k, btn in self.buttons.items():
+            btn.setChecked(k == key)
+            btn.restyle()
+    def set_admin_status(self, admin):
+        p = palette()
+        if admin:
+            self.admin_badge.setText("🛡️  صلاحيات المسؤول مفعّلة")
+            self.admin_badge.setStyleSheet(
+                f"color: {p['accent']}; background-color: {p['accent']}22; border-radius: 8px; font-size: 10.5px; font-weight: 700;"
+            )
+        else:
+            self.admin_badge.setText("⚠️  بدون صلاحيات المسؤول")
+            self.admin_badge.setStyleSheet(
+                f"color: {p['warn']}; background-color: {p['warn']}22; border-radius: 8px; font-size: 10.5px; font-weight: 700;"
+            )
+    def restyle(self):
+        p = palette()
+        self.title_lbl.setStyleSheet(f"font-size: 15px; font-weight: 800; color: {p['text']};")
+        self.subtitle_lbl.setStyleSheet(f"font-size: 10px; color: {p['accent2']}; font-weight: 600;")
+        for btn in self.buttons.values():
+            btn.restyle()
+        self.update()
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        p = palette()
+        grad = QLinearGradient(0, 0, 0, self.height())
+        grad.setColorAt(0, QColor(p["sidebar_top"]))
+        grad.setColorAt(1, QColor(p["sidebar_bottom"]))
+        painter.fillRect(self.rect(), QBrush(grad))
+        painter.setPen(QPen(QColor(p["panel_border"]), 1))
+        painter.drawLine(self.width() - 1, 0, self.width() - 1, self.height())
+        painter.end()
+        super().paintEvent(event)
+class TopBar(QWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedHeight(60)
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(24, 8, 24, 8)
+        self.page_title_lbl = QLabel("")
+        self.page_title_lbl.setStyleSheet("font-size: 13px; font-weight: 700;")
+        lay.addWidget(self.page_title_lbl)
+        lay.addStretch()
+        mode_row = QHBoxLayout()
+        mode_row.setSpacing(8)
+        self.sun_lbl = QLabel("☀️")
+        self.moon_lbl = QLabel("🌙")
+        self.toggle = ToggleSwitch()
+        self.toggle.setChecked(True)
+        self.toggle.stateChanged.connect(self._on_toggle)
+        mode_row.addWidget(self.sun_lbl)
+        mode_row.addWidget(self.toggle)
+        mode_row.addWidget(self.moon_lbl)
+        lay.addLayout(mode_row)
+        self.restyle()
+    def _on_toggle(self, state):
+        CURRENT_THEME["dark"] = bool(state)
+        theme_bus.changed.emit(bool(state))
+    def set_page_title(self, key):
+        mapping = {k: (icon, label) for k, label, icon in NAV_ITEMS}
+        icon, label = mapping.get(key, ("", ""))
+        self.page_title_lbl.setText(f"{icon}  {label}")
+        self.restyle()
+    def restyle(self):
+        p = palette()
+        self.page_title_lbl.setStyleSheet(f"font-size: 13px; font-weight: 700; color: {p['text_dim']};")
+        self.setStyleSheet(f"background-color: {p['app_bg']}; border-bottom: 1px solid {p['panel_border']};")
+class MainWindow(QMainWindow):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle(APP_NAME)
+        self.setWindowIcon(make_icon())
+        self.resize(1320, 800)
+        self.setMinimumSize(1080, 640)
+        central = QWidget()
+        self.setCentralWidget(central)
+        root_lay = QHBoxLayout(central)
+        root_lay.setContentsMargins(0, 0, 0, 0)
+        root_lay.setSpacing(0)
+        self.sidebar = Sidebar()
+        self.sidebar.nav_selected.connect(self.show_page)
+        root_lay.addWidget(self.sidebar)
+        right_col = QWidget()
+        right_lay = QVBoxLayout(right_col)
+        right_lay.setContentsMargins(0, 0, 0, 0)
+        right_lay.setSpacing(0)
+        self.topbar = TopBar()
+        right_lay.addWidget(self.topbar)
+        self.stack = QStackedWidget()
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setWidget(self.stack)
+        right_lay.addWidget(scroll, 1)
+        root_lay.addWidget(right_col, 1)
+        self.pages = {}
+        page_classes = {
+            "cleaner": CleanerPage,
+            "dashboard": DashboardPage,
+            "processes": ProcessesPage,
+            "startup": StartupPage,
+            "explorer": ExplorerPage,
+            "sysinfo": SysInfoPage,
+            "network": NetworkPage,
+            "booster": BoosterPage,
+            "boost": BoostPage,
+            "downloader": DownloaderPage,
         }
-        self.frames = {}
-        for key, cls in classes.items():
-            frame = cls(content, self)
-            frame.place(relwidth=1, relheight=1)
-            self.frames[key] = frame
-        self.show_frame("cleaner")
-
-    def show_frame(self, key):
-        if self.current_key and self.current_key in self.frames:
-            prev = self.frames[self.current_key]
-            if hasattr(prev, "on_hide"):
-                prev.on_hide()
-        for k, btn in self.nav_buttons.items():
-            btn.config(bg=ACCENT if k == key else BG_SIDEBAR, fg="#ffffff" if k == key else "#e5e7eb")
-        frame = self.frames[key]
-        frame.tkraise()
-        if hasattr(frame, "on_show"):
-            frame.on_show()
+        for key, cls in page_classes.items():
+            page = cls()
+            self.stack.addWidget(page)
+            self.pages[key] = page
+        self.current_key = None
+        theme_bus.changed.connect(self.on_theme_changed)
+        self.sidebar.set_admin_status(is_admin())
+        self.show_page("cleaner")
+        self.apply_theme()
+    def show_page(self, key):
+        if self.current_key and self.current_key in self.pages:
+            self.pages[self.current_key].on_hide()
+        self.sidebar.set_active(key)
+        self.stack.setCurrentWidget(self.pages[key])
+        self.topbar.set_page_title(key)
+        self.pages[key].on_show()
         self.current_key = key
-
-
+    def on_theme_changed(self, _dark):
+        self.apply_theme()
+    def apply_theme(self):
+        QApplication.instance().setStyleSheet(build_stylesheet())
+        self.sidebar.restyle()
+        self.topbar.restyle()
+        for page in self.pages.values():
+            page.restyle()
+    def closeEvent(self, event):
+        for page in self.pages.values():
+            try:
+                page.on_hide()
+            except Exception:
+                pass
+            for w in list(getattr(page, "_workers", [])):
+                try:
+                    if w.isRunning():
+                        w.wait(200)
+                except Exception:
+                    pass
+        event.accept()
 def main():
-    if os.name != "nt":
+    if os.name != "nt" and not os.environ.get("PC_SUITE_ALLOW_NON_WINDOWS"):
         print("هذه الأداة تعمل فقط على Windows.")
         sys.exit(1)
-    delete_old_cache()
-    if not is_admin():
+    if os.name == "nt" and not is_admin() and not os.environ.get("PC_SUITE_SKIP_ELEVATION"):
         script = os.path.abspath(sys.argv[0])
         params = " ".join([f'"{a}"' for a in sys.argv[1:]])
         ctypes.windll.shell32.ShellExecuteW(
             None, "runas", sys.executable, f'"{script}" {params}', None, 1
         )
         sys.exit(0)
-    root = tk.Tk()
-    app = MainApp(root)
-    root.mainloop()
-
-
+    app = QApplication(sys.argv)
+    app.setLayoutDirection(Qt.RightToLeft)
+    app.setWindowIcon(make_icon())
+    font = QFont("Segoe UI", 10)
+    app.setFont(font)
+    app.setStyleSheet(build_stylesheet())
+    window = MainWindow()
+    window.show()
+    sys.exit(app.exec())
 if __name__ == "__main__":
     main()
