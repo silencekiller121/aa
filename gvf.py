@@ -1314,6 +1314,8 @@ class SectionTitle(QWidget):
         if self.sub_lbl:
             self.sub_lbl.setStyleSheet(f"font-size: 12px; color: {p['text_dim']};")
 class ToggleSwitch(QCheckBox):
+    _TRACK_ON = QColor("#27e07a")
+    _TRACK_OFF = QColor("#20242e")
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setCursor(Qt.PointingHandCursor)
@@ -1323,6 +1325,8 @@ class ToggleSwitch(QCheckBox):
         self.anim.setDuration(180)
         self.anim.setEasingCurve(QEasingCurve.OutCubic)
         self.stateChanged.connect(self._animate)
+    def hitButton(self, pos):
+        return self.rect().contains(pos)
     def _animate(self, state):
         end = self.width() - self.height() + 3 if state else 3
         self.anim.stop()
@@ -1336,11 +1340,10 @@ class ToggleSwitch(QCheckBox):
         self.update()
     offset = Property(int, get_offset, set_offset)
     def paintEvent(self, event):
-        p = palette()
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
         r = self.rect()
-        track_color = QColor(p["accent"]) if self.isChecked() else QColor(p["panel_border"])
+        track_color = self._TRACK_ON if self.isChecked() else self._TRACK_OFF
         painter.setPen(Qt.NoPen)
         painter.setBrush(track_color)
         painter.drawRoundedRect(0, 0, r.width(), r.height(), r.height() / 2, r.height() / 2)
