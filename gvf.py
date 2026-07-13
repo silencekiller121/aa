@@ -26,6 +26,18 @@ try:
     import yt_dlp
 except ImportError:
     yt_dlp = None
+if os.name == "nt":
+    _CREATE_NO_WINDOW = 0x08000000
+    _orig_popen_init = subprocess.Popen.__init__
+    def _hidden_popen_init(self, *args, **kwargs):
+        kwargs.setdefault("creationflags", _CREATE_NO_WINDOW)
+        if kwargs.get("startupinfo") is None:
+            si = subprocess.STARTUPINFO()
+            si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+            si.wShowWindow = subprocess.SW_HIDE
+            kwargs["startupinfo"] = si
+        _orig_popen_init(self, *args, **kwargs)
+    subprocess.Popen.__init__ = _hidden_popen_init
 from PySide6.QtCore import (
     Qt, QThread, Signal, QObject, QTimer, QSize, QPoint, QRectF, QEasingCurve,
     QPropertyAnimation, Property,
