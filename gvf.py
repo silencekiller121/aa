@@ -42,6 +42,7 @@ from PySide6.QtWidgets import (
     QPlainTextEdit, QProgressBar, QSizePolicy, QSpacerItem, QSpinBox,
     QTextEdit, QToolButton,
 )
+WDA_EXCLUDEFROMCAPTURE = 0x00000011
 APP_NAME = "PC Suite Pro"
 APP_INITIALS = "PS"
 LOG_PATH = os.path.join(os.environ.get("USERPROFILE", str(Path.home())), "pc_suite_pro_log.txt")
@@ -319,6 +320,13 @@ def ffmpeg_location_for_ytdlp():
 def is_admin():
     try:
         return ctypes.windll.shell32.IsUserAnAdmin() != 0
+    except Exception:
+        return False
+def enable_anti_screenshot(hwnd):
+    if os.name != "nt" or not ctypes:
+        return False
+    try:
+        return bool(ctypes.windll.user32.SetWindowDisplayAffinity(int(hwnd), WDA_EXCLUDEFROMCAPTURE))
     except Exception:
         return False
 def build_protected_paths():
@@ -3013,6 +3021,9 @@ class MainWindow(QMainWindow):
         self.topbar.restyle()
         for page in self.pages.values():
             page.restyle()
+    def showEvent(self, event):
+        super().showEvent(event)
+        enable_anti_screenshot(self.winId())
     def closeEvent(self, event):
         for page in self.pages.values():
             try:
@@ -3045,6 +3056,7 @@ def main():
     app.setStyleSheet(build_stylesheet())
     window = MainWindow()
     window.show()
+    enable_anti_screenshot(window.winId())
     sys.exit(app.exec())
 if __name__ == "__main__":
     main()
