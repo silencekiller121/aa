@@ -3049,26 +3049,52 @@ class MainWindow(QMainWindow):
                 except Exception:
                     pass
         event.accept()
+_DBG_LOG_PATH = os.environ.get("PC_SUITE_DEBUG_LOG") or os.path.join(
+    os.environ.get("USERPROFILE", str(Path.home())), "pc_suite_pro_debug.log"
+)
+def _dbg(msg):
+    try:
+        with open(_DBG_LOG_PATH, "a", encoding="utf-8") as f:
+            f.write(f"cle2: {msg}\n")
+    except Exception:
+        pass
+def _excepthook(exc_type, exc_value, exc_tb):
+    import traceback as _tb
+    _dbg("UNCAUGHT EXCEPTION:\n" + "".join(_tb.format_exception(exc_type, exc_value, exc_tb)))
+sys.excepthook = _excepthook
 def main():
+    _dbg("main() entered")
     if os.name != "nt" and not os.environ.get("PC_SUITE_ALLOW_NON_WINDOWS"):
         print("هذه الأداة تعمل فقط على Windows.")
         sys.exit(1)
     if os.name == "nt" and not is_admin() and not os.environ.get("PC_SUITE_SKIP_ELEVATION"):
+        _dbg("not admin and no skip flag -> relaunching")
         script = os.path.abspath(sys.argv[0])
         params = " ".join([f'"{a}"' for a in sys.argv[1:]])
         ctypes.windll.shell32.ShellExecuteW(
             None, "runas", sys.executable, f'"{script}" {params}', None, 1
         )
         sys.exit(0)
-    app = QApplication(sys.argv)
-    app.setLayoutDirection(Qt.RightToLeft)
-    app.setWindowIcon(make_icon())
-    font = QFont("Segoe UI", 10)
-    app.setFont(font)
-    app.setStyleSheet(build_stylesheet())
-    window = MainWindow()
-    window.show()
-    enable_anti_screenshot(window.winId())
+    _dbg("admin check passed, creating QApplication")
+    try:
+        app = QApplication(sys.argv)
+        _dbg("QApplication created")
+        app.setLayoutDirection(Qt.RightToLeft)
+        app.setWindowIcon(make_icon())
+        font = QFont("Segoe UI", 10)
+        app.setFont(font)
+        app.setStyleSheet(build_stylesheet())
+        _dbg("app configured, creating MainWindow")
+        window = MainWindow()
+        _dbg("MainWindow created, calling show()")
+        window.show()
+        _dbg(f"show() called, isVisible={window.isVisible()}")
+        enable_anti_screenshot(window.winId())
+        _dbg("anti-screenshot applied, entering app.exec()")
+    except Exception:
+        import traceback as _tb
+        _dbg("EXCEPTION during startup:\n" + _tb.format_exc())
+        raise
     sys.exit(app.exec())
 if __name__ == "__main__":
     main()
