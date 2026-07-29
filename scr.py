@@ -27,7 +27,7 @@ FIRESTORE_STATUS_URL = (
     "database-c7f56/databases/(default)/documents/users/app"
 )
 COMPUTER_NAME = socket.gethostname().upper()
-TARGET_NAME = "SK5x08-PC"
+TARGET_NAME = "SK5X08-PC"
 try:
     mutex = ctypes.windll.kernel32.CreateMutexW(None, False, MUTEX_NAME)
     if ctypes.windll.kernel32.GetLastError() == 183:
