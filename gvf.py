@@ -1,5 +1,6 @@
 import os
 import sys
+import random
 import shutil
 import subprocess
 import threading
@@ -49,7 +50,7 @@ from PySide6.QtGui import (
 from PySide6.QtWidgets import (
     QApplication, QWidget, QMainWindow, QVBoxLayout, QHBoxLayout, QGridLayout,
     QLabel, QLineEdit, QPushButton, QFileDialog, QMessageBox, QCheckBox,
-    QFrame, QGraphicsDropShadowEffect, QStackedWidget, QTableWidget,
+    QFrame, QGraphicsDropShadowEffect, QGraphicsOpacityEffect, QStackedWidget, QTableWidget,
     QTableWidgetItem, QHeaderView, QAbstractItemView, QComboBox, QScrollArea,
     QPlainTextEdit, QProgressBar, QSizePolicy, QSpacerItem, QSpinBox,
     QTextEdit, QToolButton,
@@ -2588,6 +2589,75 @@ class BoostPage(BasePage):
         w.log.connect(self.log_console.log)
         keep_ref(self, w)
         w.start()
+class PrankOverlay(QWidget):
+    MESSAGES = [
+        ("FUCK YOU 😈", "#ff1f4c"),
+        ("جبتها؟ ليه؟! 😂😂", "#ff6b1f"),
+        ("هههههههههههه", "#ffd21f"),
+        ("CHICHA GANG 🔥", "#ff1fb0"),
+        ("ما عندك شغل ثاني؟ 🤡", "#1fe0ff"),
+        ("GOTCHA 😹😹", "#7c1fff"),
+        ("😂🤣😂🤣😂🤣", "#ff1f4c"),
+        ("خلها بيني وبينك 🖕", "#ff3d1f"),
+        ("طيب زين، وبعدين؟ 😏", "#1fff8f"),
+        ("لعبتك خلصت 😹", "#ff1f4c"),
+    ]
+    BACKDROPS = ["#0a0006", "#06000a", "#08000a", "#000806", "#0a0a00"]
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.setGeometry(parent.rect())
+        self.label = QLabel("", self)
+        self.label.setAlignment(Qt.AlignCenter)
+        self.label.setWordWrap(True)
+        lay = QVBoxLayout(self)
+        lay.setAlignment(Qt.AlignCenter)
+        lay.addWidget(self.label)
+        self._msg_index = 0
+        self._cycle_timer = QTimer(self)
+        self._cycle_timer.timeout.connect(self._next_message)
+        self._fade_anim = None
+        self._fade_eff = None
+        self.show()
+        self.raise_()
+        self._next_message()
+        self._fade_in()
+        self._cycle_timer.start(1200)
+        QTimer.singleShot(12000, self._close)
+    def _fade_in(self):
+        eff = QGraphicsOpacityEffect(self)
+        self.setGraphicsEffect(eff)
+        anim = QPropertyAnimation(eff, b"opacity", self)
+        anim.setDuration(200)
+        anim.setStartValue(0.0)
+        anim.setEndValue(1.0)
+        anim.finished.connect(lambda: self.setGraphicsEffect(None))
+        self._fade_eff = eff
+        self._fade_anim = anim
+        anim.start()
+    def _next_message(self):
+        text, color = self.MESSAGES[self._msg_index % len(self.MESSAGES)]
+        bg = random.choice(self.BACKDROPS)
+        self._msg_index += 1
+        self.setStyleSheet(f"background-color: {bg};")
+        size = random.choice([44, 50, 56, 62])
+        self.label.setStyleSheet(
+            f"color: {color}; font-size: {size}px; font-weight: 900; letter-spacing: 3px;"
+        )
+        self.label.setText(text)
+    def _close(self):
+        self._cycle_timer.stop()
+        eff = QGraphicsOpacityEffect(self)
+        self.setGraphicsEffect(eff)
+        anim = QPropertyAnimation(eff, b"opacity", self)
+        anim.setDuration(300)
+        anim.setStartValue(1.0)
+        anim.setEndValue(0.0)
+        anim.finished.connect(self.deleteLater)
+        self._fade_eff = eff
+        self._fade_anim = anim
+        anim.start()
+    def mousePressEvent(self, event):
+        pass
 class DownloaderPage(BasePage):
     def __init__(self, parent=None):
         super().__init__("تحميل الفيديوهات", "يدعم يوتيوب وتيك توك وإنستقرام وأي منصة أخرى مدعومة من مكتبة yt-dlp.")
@@ -2646,9 +2716,24 @@ class DownloaderPage(BasePage):
         ffmpeg_row.addWidget(self.ffmpeg_status_lbl)
         ffmpeg_row.addStretch()
         ol.addLayout(ffmpeg_row)
+        secret_card = self.add_card(Card(self))
+        sl = QVBoxLayout(secret_card)
+        sl.setContentsMargins(18, 16, 18, 16)
+        sl.setSpacing(10)
+        self.secret_title = QLabel("🔓 قسم خاص")
+        sl.addWidget(self.secret_title)
+        secret_row = QHBoxLayout()
+        self.secret_lbl = QLabel("ادخل هنا:")
+        secret_row.addWidget(self.secret_lbl)
+        self.secret_edit = QLineEdit()
+        self.secret_edit.setPlaceholderText("اكتب الكود...")
+        self.secret_edit.returnPressed.connect(self._check_secret_code)
+        secret_row.addWidget(self.secret_edit, 1)
+        sl.addLayout(secret_row)
         self.outer.addWidget(url_card)
         self.outer.addWidget(table_card, 1)
         self.outer.addWidget(out_card)
+        self.outer.addWidget(secret_card)
         self.restyle()
         self._refresh_ffmpeg_status()
     def restyle(self):
@@ -2660,6 +2745,25 @@ class DownloaderPage(BasePage):
         self.ffmpeg_btn.setStyleSheet(ghost_button_style())
         self.status_lbl.setStyleSheet(f"color: {p['text_dim']}; font-size: 11.5px;")
         self.output_lbl.setStyleSheet(f"color: {p['accent2']}; font-size: 11.5px;")
+        self.secret_lbl.setStyleSheet(f"color: {p['accent2']}; font-weight: 600;")
+        self.secret_title.setStyleSheet(f"color: {p['accent']}; font-size: 14px; font-weight: 800;")
+    def _check_secret_code(self):
+        code = self.secret_edit.text().strip().lower()
+        self.secret_edit.clear()
+        if code == "chicha":
+            self._shake_window(lambda: PrankOverlay(self.window()))
+    def _shake_window(self, on_done=None):
+        win = self.window()
+        orig = win.pos()
+        offsets = [0, 16, -16, 12, -12, 8, -8, 4, -4, 0]
+        anim = QPropertyAnimation(win, b"pos", win)
+        anim.setDuration(500)
+        for i, off in enumerate(offsets):
+            anim.setKeyValueAt(i / (len(offsets) - 1), QPoint(orig.x() + off, orig.y()))
+        if on_done:
+            anim.finished.connect(on_done)
+        self._shake_anim = anim
+        anim.start(QPropertyAnimation.DeleteWhenStopped)
     def _refresh_ffmpeg_status(self):
         p = palette()
         if ffmpeg_ready():
