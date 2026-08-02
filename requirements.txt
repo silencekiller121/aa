@@ -3,3 +3,4 @@ psutil
 yt-dlp
 PySide6
 Pillow
+flask
