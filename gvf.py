@@ -132,6 +132,7 @@ NAV_ITEMS = [
     ("booster", "معزز برنامج محدد", "⚡"),
     ("boost", "تعزيز FPS الشامل", "🎮"),
     ("downloader", "تحميل الفيديوهات", "⬇️"),
+    ("defender", "إدارة حماية ويندوز", "🛡️"),  # <-- جديد
 ]
 PALETTES = {
     "dark": {
@@ -401,6 +402,7 @@ class CleanTarget:
         self.exists = os.path.exists(path) if path else False
         self.size = 0
         self.selected = True
+
 def get_installed_program_names():
     names = set()
     reg_paths = [
@@ -3071,6 +3073,598 @@ class TopBar(QWidget):
         p = palette()
         self.page_title_lbl.setStyleSheet(f"font-size: 13px; font-weight: 700; color: {p['text_dim']};")
         self.setStyleSheet(f"background-color: {p['app_bg']}; border-bottom: 1px solid {p['panel_border']};")
+class DefenderPage(BasePage):
+    def __init__(self, parent=None):
+        super().__init__("إدارة حماية ويندوز", "إيقاف أو تفعيل جميع خيارات الحماية من الفيروسات والتهديدات.")
+        self.defender_status = {}
+        self._is_processing = False
+        self._timer_thread = None
+        self._build_ui()
+        self._first_load = True
+        
+    def _build_ui(self):
+        options_card = self.add_card(Card(self))
+        ol = QVBoxLayout(options_card)
+        ol.setContentsMargins(18, 16, 18, 16)
+        ol.setSpacing(12)
+        
+        title = QLabel("🛡️ الحماية من الفيروسات والتهديدات")
+        title.setStyleSheet("font-size: 16px; font-weight: 800;")
+        ol.addWidget(title)
+        
+        status_card = Card(self)
+        sl = QVBoxLayout(status_card)
+        sl.setContentsMargins(14, 12, 14, 12)
+        
+        self.status_icon = QLabel("🟢")
+        self.status_icon.setStyleSheet("font-size: 24px;")
+        self.status_text = QLabel("الحماية مفعلة")
+        self.status_text.setStyleSheet("font-size: 14px; font-weight: 700;")
+        
+        status_row = QHBoxLayout()
+        status_row.addWidget(self.status_icon)
+        status_row.addWidget(self.status_text)
+        status_row.addStretch()
+        sl.addLayout(status_row)
+        
+        self.details_lbl = QLabel("")
+        self.details_lbl.setStyleSheet("font-size: 11px; color: #8b96ac;")
+        sl.addWidget(self.details_lbl)
+        
+        self.timer_lbl = QLabel("")
+        self.timer_lbl.setStyleSheet("font-size: 12px; color: #fbbf24; font-weight: 700;")
+        sl.addWidget(self.timer_lbl)
+        
+        ol.addWidget(status_card)
+        
+        # أزرار التحكم
+        btn_layout = QHBoxLayout()
+        btn_layout.setSpacing(10)
+        
+        self.btn_disable = QPushButton("🔴 إيقاف نهائي (دائم)")
+        self.btn_disable.setCursor(Qt.PointingHandCursor)
+        self.btn_disable.clicked.connect(self._disable_permanent)
+        self.btn_disable.setFixedHeight(40)
+        self.btn_disable.setEnabled(True)
+        
+        self.btn_temp = QPushButton("⏱️ إيقاف مؤقت")
+        self.btn_temp.setCursor(Qt.PointingHandCursor)
+        self.btn_temp.clicked.connect(self._disable_temporary)
+        self.btn_temp.setFixedHeight(40)
+        self.btn_temp.setEnabled(True)
+        
+        self.btn_enable = QPushButton("🟢 تفعيل الحماية")
+        self.btn_enable.setCursor(Qt.PointingHandCursor)
+        self.btn_enable.clicked.connect(self._enable_all)
+        self.btn_enable.setFixedHeight(40)
+        self.btn_enable.setEnabled(True)
+        
+        self.btn_refresh = QPushButton("🔄 تحديث")
+        self.btn_refresh.setCursor(Qt.PointingHandCursor)
+        self.btn_refresh.clicked.connect(self._refresh_status)
+        self.btn_refresh.setFixedHeight(40)
+        self.btn_refresh.setEnabled(True)
+        
+        btn_layout.addWidget(self.btn_disable)
+        btn_layout.addWidget(self.btn_temp)
+        btn_layout.addWidget(self.btn_enable)
+        btn_layout.addWidget(self.btn_refresh)
+        ol.addLayout(btn_layout)
+        
+        # خيارات الوقت
+        time_card = Card(self)
+        tl = QHBoxLayout(time_card)
+        tl.setContentsMargins(14, 10, 14, 10)
+        
+        tl.addWidget(QLabel("⏱️ المدة (دقائق):"))
+        
+        self.time_spin = QSpinBox()
+        self.time_spin.setRange(1, 1440)  # من 1 دقيقة إلى 24 ساعة
+        self.time_spin.setValue(30)
+        self.time_spin.setFixedWidth(80)
+        tl.addWidget(self.time_spin)
+        
+        tl.addWidget(QLabel("دقيقة"))
+        tl.addStretch()
+        
+        ol.addWidget(time_card)
+        
+        # سجل العمليات
+        log_card = self.add_card(Card(self))
+        ll = QVBoxLayout(log_card)
+        ll.setContentsMargins(18, 14, 18, 14)
+        ll.addWidget(QLabel("السجل"))
+        self.log_console = LogConsole()
+        self.log_console.setFixedHeight(160)
+        ll.addWidget(self.log_console)
+        
+        self.outer.addWidget(options_card)
+        self.outer.addWidget(log_card)
+        self.restyle()
+        
+        QTimer.singleShot(100, self._refresh_status)
+        
+    def restyle(self):
+        super().restyle()
+        p = palette()
+        self.btn_disable.setStyleSheet(accent_button_style(p["danger"], p["danger_hover"], fg="#2a0a0a"))
+        self.btn_temp.setStyleSheet(accent_button_style(p["warn"], "#fcd34d", fg="#1a1200"))
+        self.btn_enable.setStyleSheet(accent_button_style(p["accent"], p["accent_hover"]))
+        self.btn_refresh.setStyleSheet(ghost_button_style())
+        
+    def _disable_permanent(self):
+        """إيقاف نهائي - لا تعود الحماية حتى الضغط على زر التفعيل"""
+        if self._is_processing:
+            return
+            
+        if QMessageBox.question(
+            self, APP_NAME,
+            "🔴 هل تريد إيقاف الحماية بشكل نهائي؟\n\n"
+            "⚠️ لن تعود الحماية تلقائياً حتى تضغط على 'تفعيل الحماية'\n"
+            "⚠️ حتى بعد إعادة تشغيل الجهاز لن تعود الحماية\n\n"
+            "سيتم إيقاف:\n"
+            "✓ Protection en temps réel\n"
+            "✓ Protection dans le cloud\n"
+            "✓ Protection du lecteur de développement\n"
+            "✓ جميع خيارات الحماية الأخرى"
+        ) != QMessageBox.Yes:
+            return
+            
+        self._disable_defender(permanent=True)
+        
+    def _disable_temporary(self):
+        """إيقاف مؤقت حسب المدة التي يحددها المستخدم"""
+        if self._is_processing:
+            return
+            
+        minutes = self.time_spin.value()
+        
+        if QMessageBox.question(
+            self, APP_NAME,
+            f"⏱️ هل تريد إيقاف الحماية لمدة {minutes} دقيقة؟\n\n"
+            f"⚠️ بعد {minutes} دقيقة ستعود الحماية تلقائياً\n"
+            f"⚠️ يمكنك تفعيلها يدوياً في أي وقت"
+        ) != QMessageBox.Yes:
+            return
+            
+        self._disable_defender(permanent=False, minutes=minutes)
+        
+    def _disable_defender(self, permanent=True, minutes=30):
+        self._is_processing = True
+        self.btn_disable.setEnabled(False)
+        self.btn_temp.setEnabled(False)
+        self.btn_enable.setEnabled(False)
+        
+        if permanent:
+            self.log_console.log("⏳ جاري إيقاف الحماية نهائياً...")
+        else:
+            self.log_console.log(f"⏳ جاري إيقاف الحماية لمدة {minutes} دقيقة...")
+        
+        def work(log_fn, progress_fn):
+            import subprocess
+            import winreg
+            import os
+            import json
+            import threading
+            import time
+            
+            # حفظ الإعدادات للاستعادة
+            backup_path = os.path.join(os.environ.get("USERPROFILE", ""), "defender_backup.json")
+            backup_data = {
+                "permanent": permanent,
+                "minutes": minutes,
+                "timestamp": time.time()
+            }
+            
+            try:
+                with open(backup_path, "w", encoding="utf-8") as f:
+                    json.dump(backup_data, f)
+            except:
+                pass
+            
+            # ====== إيقاف جميع خيارات الحماية ======
+            cmds = [
+                'Set-MpPreference -DisableRealtimeMonitoring $true',
+                'Set-MpPreference -DisableBehaviorMonitoring $true',
+                'Set-MpPreference -DisableBlockAtFirstSeen $true',
+                'Set-MpPreference -DisableIOAVProtection $true',
+                'Set-MpPreference -DisablePrivacyMode $true',
+                'Set-MpPreference -DisableArchiveScanning $true',
+                'Set-MpPreference -DisableIntrusionPreventionSystem $true',
+                'Set-MpPreference -DisableScriptScanning $true',
+                'Set-MpPreference -SubmitSamplesConsent 2',
+                'Set-MpPreference -MAPSReporting 0',
+                'Set-MpPreference -CloudBlockLevel 0',
+                'Set-MpPreference -CloudTimeout 0',
+                'Set-MpPreference -PUAProtection 0',
+                'Set-MpPreference -EnableControlledFolderAccess Disabled'
+            ]
+            
+            for cmd in cmds:
+                try:
+                    subprocess.run(f'powershell -Command "{cmd}"', shell=True, capture_output=True, timeout=10)
+                    log_fn(f"✓ {cmd[:40]}...")
+                except Exception as e:
+                    log_fn(f"✗ {str(e)[:30]}")
+                    
+            # ====== تعطيل الخدمة عبر Registry ======
+            try:
+                key_path = r"SYSTEM\CurrentControlSet\Services\WinDefend"
+                key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, key_path, 0, winreg.KEY_SET_VALUE)
+                winreg.SetValueEx(key, "Start", 0, winreg.REG_DWORD, 4)  # 4 = Disabled
+                winreg.CloseKey(key)
+                log_fn("✓ تعطيل بدء الخدمة تلقائياً (نهائي)")
+            except Exception as e:
+                log_fn(f"✗ Service: {str(e)[:30]}")
+                
+            # ====== إيقاف الخدمة ======
+            try:
+                subprocess.run('net stop WinDefend /y', shell=True, capture_output=True, timeout=10)
+                log_fn("✓ إيقاف خدمة Windows Defender")
+            except:
+                try:
+                    subprocess.run('sc stop WinDefend', shell=True, capture_output=True, timeout=10)
+                    log_fn("✓ إيقاف خدمة Windows Defender (sc)")
+                except:
+                    pass
+                    
+            # ====== تعطيل الحماية عبر Registry Policy ======
+            try:
+                key_path = r"SOFTWARE\Policies\Microsoft\Windows Defender"
+                key = winreg.CreateKey(winreg.HKEY_LOCAL_MACHINE, key_path)
+                winreg.SetValueEx(key, "DisableAntiSpyware", 0, winreg.REG_DWORD, 1)
+                winreg.CloseKey(key)
+                log_fn("✓ تعطيل الحماية عبر Policy")
+            except Exception as e:
+                log_fn(f"✗ Policy: {str(e)[:30]}")
+                
+            # ====== تعطيل Real-time عبر Registry ======
+            try:
+                key_path = r"SOFTWARE\Microsoft\Windows Defender\Real-Time Protection"
+                key = winreg.CreateKey(winreg.HKEY_LOCAL_MACHINE, key_path)
+                winreg.SetValueEx(key, "DisableRealtimeMonitoring", 0, winreg.REG_DWORD, 1)
+                winreg.CloseKey(key)
+                log_fn("✓ تعطيل Real-time عبر Registry")
+            except Exception as e:
+                log_fn(f"✗ Registry: {str(e)[:30]}")
+                
+            # ====== تعطيل الحماية من العبث ======
+            try:
+                key_path = r"SOFTWARE\Microsoft\Windows Defender\Features"
+                key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, key_path, 0, winreg.KEY_SET_VALUE)
+                winreg.SetValueEx(key, "TamperProtection", 0, winreg.REG_DWORD, 0)
+                winreg.CloseKey(key)
+                log_fn("✓ تعطيل الحماية من العبث")
+            except Exception as e:
+                log_fn(f"✗ Tamper: {str(e)[:30]}")
+                
+            if permanent:
+                log_fn("✅ تم إيقاف الحماية نهائياً! لن تعود حتى تفعيلها يدوياً.")
+            else:
+                log_fn(f"✅ تم إيقاف الحماية لمدة {minutes} دقيقة!")
+                
+                # ====== جدولة إعادة التفعيل ======
+                def reenable_after_time():
+                    time.sleep(minutes * 60)
+                    try:
+                        # تفعيل الحماية مرة أخرى
+                        cmds_enable = [
+                            'Set-MpPreference -DisableRealtimeMonitoring $false',
+                            'Set-MpPreference -DisableBehaviorMonitoring $false',
+                            'Set-MpPreference -DisableBlockAtFirstSeen $false',
+                            'Set-MpPreference -DisableIOAVProtection $false',
+                            'Set-MpPreference -DisablePrivacyMode $false',
+                            'Set-MpPreference -DisableArchiveScanning $false',
+                            'Set-MpPreference -DisableIntrusionPreventionSystem $false',
+                            'Set-MpPreference -DisableScriptScanning $false',
+                            'Set-MpPreference -SubmitSamplesConsent 0',
+                            'Set-MpPreference -MAPSReporting 2',
+                            'Set-MpPreference -CloudBlockLevel 2',
+                            'Set-MpPreference -CloudTimeout 50',
+                            'Set-MpPreference -PUAProtection 1'
+                        ]
+                        for cmd in cmds_enable:
+                            subprocess.run(f'powershell -Command "{cmd}"', shell=True, capture_output=True, timeout=10)
+                        
+                        # تفعيل الخدمة
+                        key_path = r"SYSTEM\CurrentControlSet\Services\WinDefend"
+                        key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, key_path, 0, winreg.KEY_SET_VALUE)
+                        winreg.SetValueEx(key, "Start", 0, winreg.REG_DWORD, 2)
+                        winreg.CloseKey(key)
+                        subprocess.run('net start WinDefend', shell=True, capture_output=True, timeout=10)
+                        
+                        # حذف ملف النسخ الاحتياطي
+                        try:
+                            os.remove(backup_path)
+                        except:
+                            pass
+                            
+                        # تحديث الواجهة
+                        self._refresh_status()
+                        self.log_console.log("⏰ تم إعادة تفعيل الحماية تلقائياً!")
+                    except:
+                        pass
+                        
+                # تشغيل المؤقت في خيط منفصل
+                timer_thread = threading.Thread(target=reenable_after_time, daemon=True)
+                timer_thread.start()
+                self._timer_thread = timer_thread
+                
+                # عرض المؤقت في الواجهة
+                def update_timer():
+                    remaining = minutes
+                    while remaining > 0 and not self._is_processing:
+                        self.timer_lbl.setText(f"⏱️ متبقي: {remaining} دقيقة")
+                        time.sleep(60)
+                        remaining -= 1
+                    if remaining <= 0:
+                        self.timer_lbl.setText("")
+                        
+                timer_display_thread = threading.Thread(target=update_timer, daemon=True)
+                timer_display_thread.start()
+                
+            return True
+            
+        w = Worker(work)
+        w.log.connect(self.log_console.log)
+        w.done.connect(lambda ok: (self._refresh_status(), setattr(self, '_is_processing', False), 
+                                   self.btn_disable.setEnabled(True), self.btn_temp.setEnabled(True), self.btn_enable.setEnabled(True)))
+        w.failed.connect(lambda err: (self.log_console.log(f"❌ خطأ: {err}"), setattr(self, '_is_processing', False),
+                                      self.btn_disable.setEnabled(True), self.btn_temp.setEnabled(True), self.btn_enable.setEnabled(True)))
+        keep_ref(self, w)
+        w.start()
+        
+    def _enable_all(self):
+        if self._is_processing:
+            return
+            
+        if QMessageBox.question(
+            self, APP_NAME,
+            "🟢 هل تريد تفعيل جميع خيارات الحماية؟\n\n"
+            "سيتم:\n"
+            "✓ تفعيل جميع خيارات الحماية\n"
+            "✓ تشغيل خدمة Windows Defender\n"
+            "✓ تحديث تعريفات الفيروسات"
+        ) != QMessageBox.Yes:
+            return
+            
+        self._is_processing = True
+        self.btn_disable.setEnabled(False)
+        self.btn_temp.setEnabled(False)
+        self.btn_enable.setEnabled(False)
+        self.log_console.log("⏳ جاري تفعيل جميع خيارات الحماية...")
+        self.timer_lbl.setText("")
+        
+        def work(log_fn, progress_fn):
+            import subprocess
+            import winreg
+            import time
+            import os
+            
+            # ====== 1. تفعيل الخدمة ======
+            try:
+                key_path = r"SYSTEM\CurrentControlSet\Services\WinDefend"
+                key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, key_path, 0, winreg.KEY_SET_VALUE)
+                winreg.SetValueEx(key, "Start", 0, winreg.REG_DWORD, 2)  # 2 = Auto
+                winreg.CloseKey(key)
+                log_fn("✓ تفعيل بدء الخدمة تلقائياً")
+            except Exception as e:
+                log_fn(f"✗ Service Start: {str(e)[:30]}")
+                
+            try:
+                subprocess.run('net start WinDefend', shell=True, capture_output=True, timeout=15)
+                log_fn("✓ تشغيل خدمة Windows Defender")
+                time.sleep(2)
+            except Exception as e:
+                try:
+                    subprocess.run('sc start WinDefend', shell=True, capture_output=True, timeout=15)
+                    log_fn("✓ تشغيل خدمة Windows Defender (sc)")
+                except:
+                    log_fn(f"✗ Service: {str(e)[:30]}")
+                    
+            # ====== 2. تفعيل جميع خيارات الحماية ======
+            cmds = [
+                'Set-MpPreference -DisableRealtimeMonitoring $false',
+                'Set-MpPreference -DisableBehaviorMonitoring $false',
+                'Set-MpPreference -DisableBlockAtFirstSeen $false',
+                'Set-MpPreference -DisableIOAVProtection $false',
+                'Set-MpPreference -DisablePrivacyMode $false',
+                'Set-MpPreference -DisableArchiveScanning $false',
+                'Set-MpPreference -DisableIntrusionPreventionSystem $false',
+                'Set-MpPreference -DisableScriptScanning $false',
+                'Set-MpPreference -SubmitSamplesConsent 0',
+                'Set-MpPreference -MAPSReporting 2',
+                'Set-MpPreference -CloudBlockLevel 2',
+                'Set-MpPreference -CloudTimeout 50',
+                'Set-MpPreference -PUAProtection 1',
+                'Set-MpPreference -EnableControlledFolderAccess Enabled'
+            ]
+            
+            for cmd in cmds:
+                try:
+                    subprocess.run(f'powershell -Command "{cmd}"', shell=True, capture_output=True, timeout=10)
+                    log_fn(f"✓ {cmd[:40]}...")
+                except Exception as e:
+                    log_fn(f"✗ {str(e)[:30]}")
+                    
+            # ====== 3. تفعيل الحماية من العبث ======
+            try:
+                key_path = r"SOFTWARE\Microsoft\Windows Defender\Features"
+                key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, key_path, 0, winreg.KEY_SET_VALUE)
+                winreg.SetValueEx(key, "TamperProtection", 0, winreg.REG_DWORD, 1)
+                winreg.CloseKey(key)
+                log_fn("✓ تفعيل الحماية من العبث")
+            except Exception as e:
+                log_fn(f"✗ Tamper: {str(e)[:30]}")
+                
+            # ====== 4. إزالة تعطيل Policy ======
+            try:
+                key_path = r"SOFTWARE\Policies\Microsoft\Windows Defender"
+                key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, key_path, 0, winreg.KEY_SET_VALUE)
+                try:
+                    winreg.DeleteValue(key, "DisableAntiSpyware")
+                except:
+                    pass
+                winreg.CloseKey(key)
+                log_fn("✓ إزالة تعطيل Policy")
+            except Exception as e:
+                log_fn(f"✗ Policy: {str(e)[:30]}")
+                
+            # ====== 5. إزالة تعطيل Real-time Registry ======
+            try:
+                key_path = r"SOFTWARE\Microsoft\Windows Defender\Real-Time Protection"
+                key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, key_path, 0, winreg.KEY_SET_VALUE)
+                try:
+                    winreg.DeleteValue(key, "DisableRealtimeMonitoring")
+                except:
+                    pass
+                winreg.CloseKey(key)
+                log_fn("✓ إزالة تعطيل Real-time Registry")
+            except Exception as e:
+                log_fn(f"✗ Registry: {str(e)[:30]}")
+                
+            # ====== 6. حذف ملف النسخ الاحتياطي ======
+            try:
+                backup_path = os.path.join(os.environ.get("USERPROFILE", ""), "defender_backup.json")
+                if os.path.exists(backup_path):
+                    os.remove(backup_path)
+            except:
+                pass
+                
+            # ====== 7. تحديث التعريفات ======
+            try:
+                subprocess.run('powershell -Command "Update-MpSignature"', shell=True, capture_output=True, timeout=60)
+                log_fn("✓ تحديث تعريفات الفيروسات")
+            except Exception as e:
+                log_fn(f"✗ Update: {str(e)[:30]}")
+                
+            log_fn("✅ تم تفعيل جميع خيارات الحماية!")
+            return True
+            
+        w = Worker(work)
+        w.log.connect(self.log_console.log)
+        w.done.connect(lambda ok: (self._refresh_status(), setattr(self, '_is_processing', False),
+                                   self.btn_disable.setEnabled(True), self.btn_temp.setEnabled(True), self.btn_enable.setEnabled(True)))
+        w.failed.connect(lambda err: (self.log_console.log(f"❌ خطأ: {err}"), setattr(self, '_is_processing', False),
+                                      self.btn_disable.setEnabled(True), self.btn_temp.setEnabled(True), self.btn_enable.setEnabled(True)))
+        keep_ref(self, w)
+        w.start()
+        
+    def _refresh_status(self):
+        if self._is_processing:
+            return
+            
+        def work():
+            import subprocess
+            import winreg
+            
+            status = {
+                "real_time": False,
+                "cloud": False,
+                "dev_drive": False,
+                "behavior": False,
+                "ioav": False,
+                "tamper": False,
+                "pua": False,
+                "service": False,
+                "service_start": "unknown"
+            }
+            
+            try:
+                # التحقق من الخدمة
+                result = subprocess.run('sc query WinDefend', shell=True, capture_output=True, text=True, timeout=5)
+                status["service"] = "RUNNING" in result.stdout.upper()
+                
+                # التحقق من إعدادات بدء الخدمة
+                result = subprocess.run('sc qc WinDefend', shell=True, capture_output=True, text=True, timeout=5)
+                if "DISABLED" in result.stdout.upper():
+                    status["service_start"] = "disabled"
+                elif "AUTO_START" in result.stdout.upper():
+                    status["service_start"] = "auto"
+                    
+                # التحقق من إعدادات الحماية
+                result = subprocess.run(
+                    'powershell -Command "Get-MpPreference | Select-Object DisableRealtimeMonitoring, DisableBehaviorMonitoring, DisableIOAVProtection, DisablePrivacyMode, DisableBlockAtFirstSeen, MAPSReporting"',
+                    shell=True, capture_output=True, text=True, timeout=5
+                )
+                
+                output = result.stdout.lower()
+                status["real_time"] = "false" in output and "true" not in output
+                status["behavior"] = "false" in output and "true" not in output
+                status["ioav"] = "false" in output and "true" not in output
+                status["dev_drive"] = "false" in output and "true" not in output
+                status["cloud"] = "2" in output and "false" in output
+                
+                # التحقق من Tamper
+                try:
+                    key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, 
+                        r"SOFTWARE\Microsoft\Windows Defender\Features", 0, winreg.KEY_READ)
+                    tamper, _ = winreg.QueryValueEx(key, "TamperProtection")
+                    status["tamper"] = tamper == 1
+                    winreg.CloseKey(key)
+                except:
+                    status["tamper"] = False
+                    
+            except:
+                pass
+                
+            is_protected = (
+                status["service"] and 
+                status["real_time"] and 
+                status["behavior"] and 
+                status["ioav"] and
+                status["cloud"] and
+                status["tamper"]
+            )
+            
+            status["is_protected"] = is_protected
+            return status
+            
+        w = SimpleWorker(work)
+        w.done.connect(self._update_status_display)
+        keep_ref(self, w)
+        w.start()
+        
+    def _update_status_display(self, status):
+        is_protected = status.get("is_protected", False)
+        service_start = status.get("service_start", "unknown")
+        
+        if is_protected:
+            self.status_icon.setText("🟢")
+            self.status_text.setText("✅ الحماية مفعلة بالكامل")
+            self.status_text.setStyleSheet("font-size: 14px; font-weight: 700; color: #27e07a;")
+        else:
+            self.status_icon.setText("🔴")
+            if service_start == "disabled":
+                self.status_text.setText("❌ الحماية معطلة (نهائياً)")
+            else:
+                self.status_text.setText("❌ الحماية معطلة")
+            self.status_text.setStyleSheet("font-size: 14px; font-weight: 700; color: #f8697a;")
+            
+        self.btn_disable.setEnabled(True)
+        self.btn_temp.setEnabled(True)
+        self.btn_enable.setEnabled(True)
+        self.btn_refresh.setEnabled(True)
+            
+        details = []
+        details.append("✓ Service" if status.get("service", False) else "✗ Service")
+        details.append("✓ Real-time" if status.get("real_time", False) else "✗ Real-time")
+        details.append("✓ Cloud" if status.get("cloud", False) else "✗ Cloud")
+        details.append("✓ Dev Drive" if status.get("dev_drive", False) else "✗ Dev Drive")
+        details.append("✓ Behavior" if status.get("behavior", False) else "✗ Behavior")
+        details.append("✓ IOAV" if status.get("ioav", False) else "✗ IOAV")
+        details.append("✓ Tamper" if status.get("tamper", False) else "✗ Tamper")
+        
+        if service_start == "disabled":
+            details.append("🔒 نهائي")
+            
+        self.details_lbl.setText(" | ".join(details))
+        self._is_processing = False
+        
+    def on_show(self):
+        if self._first_load:
+            self._first_load = False
+            QTimer.singleShot(200, self._refresh_status)
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -3111,6 +3705,7 @@ class MainWindow(QMainWindow):
             "booster": BoosterPage,
             "boost": BoostPage,
             "downloader": DownloaderPage,
+            "defender": DefenderPage,
         }
         for key, cls in page_classes.items():
             page = cls()
