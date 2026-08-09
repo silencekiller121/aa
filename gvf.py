@@ -399,16 +399,15 @@ def _run_hidden(cmd, timeout=60):
         return subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=timeout)
     except Exception:
         return None
-def _take_ownership(path, is_dir, log_fn=None):
-    def _log(msg):
-        if log_fn:
-            try:
-                log_fn(msg)
-            except Exception:
-                pass
+def _take_ownership(path, is_dir, logs):
     if os.name != "nt":
         return
-    _log(f"🔑 جاري أخذ الملكية وتعديل الصلاحيات: {path}")
+    logs.append(f"🔑 جاري أخذ الملكية وتعديل الصلاحيات: {path}")
+    parent = os.path.dirname(os.path.normpath(path))
+    if parent:
+        _run_hidden(f'takeown /f "{parent}"', timeout=60)
+        _run_hidden(f'icacls "{parent}" /grant *S-1-1-0:F', timeout=60)
+        _run_hidden(f'icacls "{parent}" /grant administrators:F', timeout=60)
     if is_dir:
         _run_hidden(f'takeown /f "{path}" /r /d y', timeout=120)
         _run_hidden(f'icacls "{path}" /grant *S-1-1-0:F /t /c /q', timeout=120)
@@ -444,27 +443,65 @@ def _rmtree_onerror(func, path, exc_info):
         func(path)
     except Exception:
         pass
-def force_delete_path(path, is_dir, log_fn=None):
-    def _log(msg):
-        if log_fn:
+def _kill_locking_processes(path, logs):
+    if psutil is None:
+        return
+    target = os.path.normcase(os.path.abspath(path))
+    try:
+        for proc in psutil.process_iter(["pid", "name"]):
             try:
-                log_fn(msg)
+                for f in proc.open_files():
+                    fp = os.path.normcase(os.path.abspath(f.path))
+                    if fp == target or fp.startswith(target + os.sep):
+                        logs.append(f"🛑 إنهاء العملية {proc.info.get('name')} (PID {proc.info.get('pid')}) لأنها تستخدم الملف...")
+                        proc.terminate()
+                        try:
+                            proc.wait(timeout=3)
+                        except Exception:
+                            proc.kill()
             except Exception:
-                pass
+                continue
+    except Exception:
+        pass
+def _schedule_delete_on_reboot(path, is_dir, logs):
+    if os.name != "nt" or not ctypes:
+        return False
+    try:
+        MOVEFILE_DELAY_UNTIL_REBOOT = 0x4
+        targets = [path]
+        if is_dir:
+            for root, dirs, files in os.walk(path, topdown=False):
+                for f in files:
+                    targets.append(os.path.join(root, f))
+                for d in dirs:
+                    targets.append(os.path.join(root, d))
+        ok_any = False
+        for t in targets:
+            res = ctypes.windll.kernel32.MoveFileExW(str(t), None, MOVEFILE_DELAY_UNTIL_REBOOT)
+            if res:
+                ok_any = True
+        if ok_any:
+            logs.append("🕒 تم جدولة الحذف تلقائياً عند إعادة تشغيل الجهاز.")
+        return ok_any
+    except Exception as e:
+        logs.append(f"⚠️ فشلت جدولة الحذف عند إعادة التشغيل: {e}")
+        return False
+def force_delete_path(path, is_dir):
+    logs = []
     kind = "الفولدر" if is_dir else "الملف"
     if not os.path.exists(path):
-        return False, "المسار غير موجود."
+        return False, "المسار غير موجود.", logs
     try:
         if is_dir:
             shutil.rmtree(path, onerror=_rmtree_onerror)
         else:
             os.remove(path)
         if not os.path.exists(path):
-            return True, f"تم حذف {kind} بنجاح."
+            return True, f"تم حذف {kind} بنجاح.", logs
     except Exception as e:
-        _log(f"⚠️ فشلت المحاولة المباشرة: {e}")
+        logs.append(f"⚠️ فشلت المحاولة المباشرة: {e}")
     if os.path.exists(path):
-        _log("🔓 جاري إزالة خاصية القراءة فقط وإعادة المحاولة...")
+        logs.append("🔓 جاري إزالة خاصية القراءة فقط وإعادة المحاولة...")
         _clear_readonly(path)
         try:
             if is_dir:
@@ -472,11 +509,11 @@ def force_delete_path(path, is_dir, log_fn=None):
             else:
                 os.remove(path)
             if not os.path.exists(path):
-                return True, f"تم حذف {kind} بنجاح بعد إزالة القفل."
+                return True, f"تم حذف {kind} بنجاح بعد إزالة القفل.", logs
         except Exception as e:
-            _log(f"⚠️ ما زالت المحاولة فاشلة: {e}")
+            logs.append(f"⚠️ ما زالت المحاولة فاشلة: {e}")
     if os.path.exists(path) and os.name == "nt":
-        _take_ownership(path, is_dir, log_fn)
+        _take_ownership(path, is_dir, logs)
         _clear_readonly(path)
         try:
             if is_dir:
@@ -484,19 +521,32 @@ def force_delete_path(path, is_dir, log_fn=None):
             else:
                 os.remove(path)
         except Exception as e:
-            _log(f"⚠️ فشلت المحاولة بعد أخذ الملكية: {e}")
+            logs.append(f"⚠️ فشلت المحاولة بعد أخذ الملكية: {e}")
         if os.path.exists(path):
-            _log("🧨 جاري تنفيذ أمر حذف إجباري عبر النظام...")
+            logs.append("🧨 جاري تنفيذ أمر حذف إجباري عبر النظام...")
             try:
                 if is_dir:
                     _run_hidden(f'rmdir /s /q "{path}"', timeout=180)
                 else:
                     _run_hidden(f'del /f /q /a "{path}"', timeout=60)
             except Exception as e:
-                _log(f"⚠️ فشل أمر الحذف النهائي: {e}")
+                logs.append(f"⚠️ فشل أمر الحذف النهائي: {e}")
+    if not os.path.exists(path):
+        return True, f"تم حذف {kind} بنجاح.", logs
+    logs.append("🔍 جاري التحقق من وجود برنامج يستخدم الملف حالياً...")
+    _kill_locking_processes(path, logs)
+    try:
+        if is_dir:
+            shutil.rmtree(path, onerror=_rmtree_onerror)
+        else:
+            os.remove(path)
+    except Exception as e:
+        logs.append(f"⚠️ فشلت المحاولة بعد إغلاق البرامج المستخدمة: {e}")
     if os.path.exists(path):
-        return False, f"تعذّر حذف {kind} حتى بعد أخذ الملكية وتعديل الصلاحيات. قد يكون مستخدَماً من برنامج آخر حالياً."
-    return True, f"تم حذف {kind} بنجاح."
+        if _schedule_delete_on_reboot(path, is_dir, logs):
+            return True, f"تعذّر حذف {kind} فوراً لأنه قيد الاستخدام، لكن تم جدولة حذفه تلقائياً عند إعادة تشغيل الجهاز.", logs
+        return False, f"تعذّر حذف {kind} حتى بعد أخذ الملكية وتعديل الصلاحيات وإغلاق البرامج المستخدمة له.", logs
+    return True, f"تم حذف {kind} بنجاح.", logs
 class CleanTarget:
     def __init__(self, label, path, kind="folder_contents", category="عام"):
         self.label = label
@@ -3269,20 +3319,19 @@ class DeleteFilesPage(BasePage):
         self.status_lbl.setText("جاري الحذف...")
         self.log_console.log(f"⏳ جاري حذف: {path}")
 
-        def work(log_fn, progress_fn):
-            return force_delete_path(path, is_dir, log_fn)
-
-        w = SimpleWorker(lambda: work(self.log_console.log, None))
+        w = SimpleWorker(force_delete_path, path, is_dir)
         w.done.connect(self._on_delete_done)
         w.failed.connect(self._on_delete_failed)
         keep_ref(self, w)
         w.start()
 
     def _on_delete_done(self, result):
-        ok, message = result
+        ok, message, logs = result
         self._is_processing = False
         self.btn_pick_file.setEnabled(True)
         self.btn_pick_folder.setEnabled(True)
+        for line in logs:
+            self.log_console.log(line)
         if ok:
             self.status_lbl.setText("✅ تم الحذف بنجاح.")
             self.log_console.log(f"✅ {message}")
