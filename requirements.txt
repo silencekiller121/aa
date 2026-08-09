@@ -2,3 +2,5 @@ requests
 psutil
 Pillow
 discord.py
+yt-dlp
+PySide6
